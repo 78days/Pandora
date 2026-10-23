@@ -1,6 +1,18 @@
 {
   "version": 1,
   "skills": {
+    "brag": {
+      "source": "latent-spaces/brag",
+      "sourceType": "github",
+      "skillPath": "skills/brag/SKILL.md",
+      "computedHash": "28962062c98f3b844219cd7762834d57dd784149ec6898d15f008e4a99f91204"
+    },
+    "firecrawl": {
+      "source": "firecrawl/skills",
+      "sourceType": "github",
+      "skillPath": "skills/core/firecrawl/SKILL.md",
+      "computedHash": "2db6c8158fd19010db636af0f5fbb2a0100e3fbc153dc90d1269bef092955f95"
+    },
     "shadcn": {
       "source": "shadcn/ui",
       "sourceType": "github",
