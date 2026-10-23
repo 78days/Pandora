@@ -1,33 +1,37 @@
-import { SignInButton, SignUpButton, Show, UserButton } from "@clerk/nextjs"
-import { Suspense } from "react"
+import { auth } from "@clerk/nextjs/server"
 
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 
-export default function Page() {
+export default async function Page() {
+  await auth.protect()
+
   return (
-    <div className="flex min-h-svh flex-col gap-6 p-6">
-      <div className="flex items-center justify-end gap-2">
-        <Suspense>
-          <Show when="signed-out">
-            <SignInButton />
-            <SignUpButton />
-          </Show>
-          <Show when="signed-in">
-            <UserButton />
-          </Show>
-        </Suspense>
-      </div>
-      <div className="flex max-w-md min-w-0 flex-col gap-4 text-sm leading-loose">
-        <div>
-          <h1 className="font-medium">Project ready!</h1>
-          <p>You may now add components and start building.</p>
-          <p>We&apos;ve already added the button component for you.</p>
-          <Button className="mt-2">Button</Button>
-        </div>
-        <div className="font-mono text-xs text-muted-foreground">
-          (Press <kbd>d</kbd> to toggle dark mode)
-        </div>
-      </div>
-    </div>
+    <Empty className="min-h-svh">
+      <EmptyHeader>
+        <EmptyMedia variant="default">
+          <Avatar className="size-12">
+            <AvatarImage src="/favicon.ico" className="grayscale" />
+            <AvatarFallback>LR</AvatarFallback>
+          </Avatar>
+        </EmptyMedia>
+        <EmptyTitle>User Offline</EmptyTitle>
+        <EmptyDescription>
+          This user is currently offline. You can leave a message to notify them
+          or try again later.
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button size="sm">Leave Message</Button>
+      </EmptyContent>
+    </Empty>
   )
 }
