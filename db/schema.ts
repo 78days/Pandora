@@ -1,11 +1,10 @@
-// Define Drizzle tables here, then run `npm run db:generate`.
-//
-// import { pgTable, serial, text } from "drizzle-orm/pg-core"
-//
-// export const example = pgTable("example", {
-//   id: serial("id").primaryKey(),
-//   name: text("name").notNull(),
-// })
+import { boolean, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core"
 
-export {}
-
+export const todos = pgTable("todos", {
+  id: serial("id").primaryKey(),
+  title: text("title").notNull(),
+  completed: boolean("completed").default(false).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+})

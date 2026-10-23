@@ -10,6 +10,14 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 
 
+## Development
+
+This is a development project. There is no backwards compatibility and the data is worthless. Prefer data loss: never backfill, migrate, or preserve existing rows, and never spend effort on keeping old data working. Every schema change means a clean slate.
+
+## Database
+
+- Use `npm run db:push` for schema changes. Never run migrations or create migration files (`drizzle-kit generate` / `drizzle-kit migrate`).
+
 ## Git
 
 - Never create branches, worktrees, or commits automatically. Only do so when the user explicitly asks for that specific action in the current request.
