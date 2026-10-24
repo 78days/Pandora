@@ -18,6 +18,18 @@ This is a development project. There is no backwards compatibility and the data 
 
 - Use `npm run db:push` for schema changes. Never run migrations or create migration files (`drizzle-kit generate` / `drizzle-kit migrate`).
 
+## Forms
+
+- Stack: `zod`, `drizzle-zod`, `react-hook-form`, and `@hookform/resolvers`. Install them with `--legacy-peer-deps` (an optional `effect` peer conflicts with the installed `effect` 3). Use the shadcn `Field` primitives; there is no `Form` wrapper.
+- Define the insert schema next to the table in `db/schema.ts` with `createInsertSchema(table)`. Omit server-managed columns (`id`, `userId`, `createdAt`, `sandboxId`), give validation rules explicit user-facing messages, and export the inferred type. Client and server share this one schema; never hand-write a second client-side copy.
+- Put server actions in `actions/<name>.ts` with `"use server"`. Read `userId` from `await auth()`, throw when it is missing, parse the input with the insert schema, and set `userId` from auth. Never take a user id from form input.
+- Client forms live in `components/<name>-dialog.tsx` and own their trigger, so pages render only the component. Compose with `Dialog` + `FieldGroup` / `Field` / `FieldLabel` / `FieldError`; `register` plain inputs, set `aria-invalid` on the input and `data-invalid` on the `Field`, and pass `errors` to `FieldError`.
+- Use `useWatch` for values rendered outside inputs. `form.watch` trips the React Compiler ESLint warning.
+- Never render a random value during SSR. Start from a stable value and generate seeds/ids in `useEffect` or on a user action; a random `defaultValue` that reaches the server render causes a hydration mismatch.
+- Presets and shortcuts write through `setValue(..., { shouldValidate: true })`; they never bypass validation.
+- Reset the form when the dialog closes (`onOpenChange`) so Cancel discards edits, and reset after a successful submit. Show server failures with `setError("root", ...)` and disable submit with `formState.isSubmitting`.
+- Verify forms in the browser (validation messages, presets, success, server failure) plus `npm run typecheck`, `npx eslint`, and `npx prettier --check`.
+
 ## Git
 
 - Never create branches, worktrees, or commits automatically. Only do so when the user explicitly asks for that specific action in the current request.
