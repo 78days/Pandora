@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod"
 import { PlusIcon, ShuffleIcon } from "lucide-react"
+import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import { useForm, useWatch } from "react-hook-form"
 
@@ -60,8 +61,19 @@ function emptyBot(): BotsInsert {
   return { avatar: crypto.randomUUID(), name: "", job: "", instructions: "" }
 }
 
-function BotDialog() {
-  const [open, setOpen] = useState(false)
+// Uncontrolled (no `open` prop) renders its own trigger; controlled callers
+// (the sidebar header menu) render it trigger-less and open it themselves.
+function BotDialog({
+  open: controlledOpen,
+  onOpenChange,
+}: {
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}) {
+  const router = useRouter()
+  const [internalOpen, setInternalOpen] = useState(false)
+  const isControlled = controlledOpen !== undefined
+  const open = isControlled ? controlledOpen : internalOpen
   const form = useForm<BotsInsert>({
     resolver: zodResolver(botsInsertSchema),
     defaultValues: emptyBot(),
@@ -73,8 +85,9 @@ function BotDialog() {
     form.setValue("avatar", crypto.randomUUID())
   }, [form])
 
-  function onOpenChange(nextOpen: boolean) {
-    setOpen(nextOpen)
+  function changeOpen(nextOpen: boolean) {
+    if (!isControlled) setInternalOpen(nextOpen)
+    onOpenChange?.(nextOpen)
     if (!nextOpen) form.reset(emptyBot())
   }
 
@@ -93,7 +106,8 @@ function BotDialog() {
     try {
       await createBot(values)
       form.reset(emptyBot())
-      setOpen(false)
+      router.refresh()
+      changeOpen(false)
     } catch {
       form.setError("root", {
         message: "Could not create the bot. Please try again.",
@@ -102,11 +116,13 @@ function BotDialog() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogTrigger render={<Button variant="secondary" />}>
-        <PlusIcon data-icon="inline-start" />
-        Create a new bot
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={changeOpen}>
+      {!isControlled && (
+        <DialogTrigger render={<Button variant="secondary" />}>
+          <PlusIcon data-icon="inline-start" />
+          Create a new bot
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New bot</DialogTitle>
