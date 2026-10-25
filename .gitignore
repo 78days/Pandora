@@ -43,3 +43,5 @@ next-env.d.ts
 .clerk/
 .neon
 image.png
+
+.trigger
