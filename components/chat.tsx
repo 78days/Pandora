@@ -6,7 +6,13 @@ import {
   useTriggerChatTransport,
   type InferChatUIMessage,
 } from "@trigger.dev/sdk/chat/react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react"
 
 import {
   loadChatTranscript,
@@ -38,6 +44,7 @@ import {
 } from "@/components/ai-elements/reasoning"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { ChatAvatar } from "@/components/chat-avatar"
+import { Kbd } from "@/components/ui/kbd"
 import type { pandoraChat } from "@/trigger/chat"
 
 type ChatMessage = InferChatUIMessage<typeof pandoraChat>
@@ -333,6 +340,74 @@ function ChatView({
     transport.stopGeneration(chatId)
   }, [aiStop, chatId, transport])
 
+  // Composer is uncontrolled, so ↑/↓ recall writes the DOM value directly.
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const sentRef = useRef<string[]>([])
+  const historyIndexRef = useRef<number | null>(null)
+
+  const setDraft = (text: string) => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.value = text
+    textarea.setSelectionRange(text.length, text.length)
+  }
+
+  // ↑ walks back through sent prompts (from an empty draft or mid-walk);
+  // ↓ walks forward, returning to an empty draft past the newest entry.
+  const handleTextareaKeyDown = (
+    e: ReactKeyboardEvent<HTMLTextAreaElement>
+  ) => {
+    const sent = sentRef.current
+    if (e.key === "ArrowUp" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const index = historyIndexRef.current
+      if ((e.currentTarget.value !== "" && index === null) || sent.length === 0)
+        return
+      e.preventDefault()
+      const next = index === null ? sent.length - 1 : Math.max(0, index - 1)
+      historyIndexRef.current = next
+      setDraft(sent[next] ?? "")
+    } else if (e.key === "ArrowDown" && historyIndexRef.current !== null) {
+      e.preventDefault()
+      const next = historyIndexRef.current + 1
+      const text = next < sent.length ? (sent[next] ?? "") : ""
+      historyIndexRef.current = next < sent.length ? next : null
+      setDraft(text)
+    }
+  }
+
+  // Escape stops a running turn from anywhere on the page; "/" focuses the
+  // composer. Both stand down inside Base UI popups (dialogs, menus), where
+  // Escape must keep closing the popup and typing goes to its own fields.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as Element | null
+      // Every Base UI popup (dialog, menu, select, popover) sets this.
+      if (target?.closest?.("[data-base-ui-focusable]")) return
+      if (event.key === "Escape") {
+        if (
+          statusRef.current === "submitted" ||
+          statusRef.current === "streaming"
+        ) {
+          event.preventDefault()
+          stop()
+        }
+        return
+      }
+      if (
+        event.key === "/" &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !target?.closest?.("input, textarea, select, [contenteditable='true']")
+      ) {
+        event.preventDefault()
+        textareaRef.current?.focus()
+      }
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [stop])
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* TEMPORARY debug strip — remove once reload-resume is confirmed. */}
@@ -381,13 +456,41 @@ function ChatView({
       <div className="p-4">
         <PromptInput
           onSubmit={(message) => {
-            if (message.text?.trim()) sendMessage({ text: message.text })
+            const text = message.text?.trim()
+            if (!text) return
+            const sent = sentRef.current
+            if (sent[sent.length - 1] !== text) {
+              sent.push(text)
+              if (sent.length > 100) sent.shift()
+            }
+            historyIndexRef.current = null
+            sendMessage({ text })
           }}
         >
           <PromptInputBody>
-            <PromptInputTextarea placeholder={`Message ${name}...`} />
+            <PromptInputTextarea
+              autoFocus
+              onKeyDown={handleTextareaKeyDown}
+              placeholder={`Message ${name}...`}
+              ref={textareaRef}
+            />
           </PromptInputBody>
           <PromptInputFooter>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Kbd>↵</Kbd> send
+              </span>
+              <span className="flex items-center gap-1">
+                <Kbd>⇧</Kbd>
+                <Kbd>↵</Kbd> newline
+              </span>
+              <span className="flex items-center gap-1">
+                <Kbd>↑</Kbd> history
+              </span>
+              <span className="flex items-center gap-1">
+                <Kbd>esc</Kbd> stop
+              </span>
+            </div>
             <PromptInputSubmit status={status} onStop={stop} />
           </PromptInputFooter>
         </PromptInput>
