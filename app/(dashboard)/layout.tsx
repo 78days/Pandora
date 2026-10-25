@@ -1,4 +1,5 @@
 import { Suspense } from "react"
+import { cookies } from "next/headers"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import {
@@ -8,13 +9,16 @@ import {
 } from "@/components/sidebar-chats"
 import { SidebarProvider } from "@/components/ui/sidebar"
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  // Written by SidebarProvider on every toggle; absent cookie means expanded.
+  const sidebarState = (await cookies()).get("sidebar_state")
+
   return (
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={sidebarState?.value !== "false"}>
       <AppSidebar
         chats={
           <Suspense fallback={<SidebarChatsSkeleton />}>

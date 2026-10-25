@@ -33,10 +33,11 @@ async function SidebarChats() {
             <SidebarMenuItem key={chat.id}>
               <SidebarMenuButton
                 size="lg"
+                tooltip={chat.botName}
                 render={<Link href={`/chats/${chat.id}`} />}
               >
                 <ChatAvatar seed={chat.botAvatar} />
-                <div className="grid flex-1 gap-0.5 text-left leading-tight">
+                <div className="grid flex-1 gap-0.5 text-left leading-tight group-data-[collapsible=icon]:hidden">
                   <span className="truncate font-medium">{chat.botName}</span>
                   {chat.lastMessagePreview && (
                     <span className="truncate text-xs text-muted-foreground">
@@ -44,7 +45,7 @@ async function SidebarChats() {
                     </span>
                   )}
                 </div>
-                <span className="text-xs text-muted-foreground">
+                <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
                   {relativeTime(chat.lastMessageAt)}
                 </span>
               </SidebarMenuButton>

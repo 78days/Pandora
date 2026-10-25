@@ -29,6 +29,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
 } from "@/components/ui/sidebar"
 
 export function AppSidebar({
@@ -55,7 +56,7 @@ export function AppSidebar({
 
   return (
     <>
-      <Sidebar>
+      <Sidebar collapsible="icon">
         <SidebarHeader>
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -81,14 +82,16 @@ export function AppSidebar({
           </DropdownMenu>
           <Button
             variant="ghost"
-            className="h-8 w-full justify-between rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm font-normal text-muted-foreground dark:bg-input/30"
+            className="h-8 w-full justify-between rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm font-normal text-muted-foreground group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:border-transparent! group-data-[collapsible=icon]:bg-transparent! group-data-[collapsible=icon]:p-2! dark:bg-input/30"
             onClick={() => setSearchOpen(true)}
           >
             <span className="flex items-center gap-2">
               <SearchIcon />
-              Search
+              <span className="group-data-[collapsible=icon]:hidden">
+                Search
+              </span>
             </span>
-            <Kbd>⌘K</Kbd>
+            <Kbd className="group-data-[collapsible=icon]:hidden">⌘K</Kbd>
           </Button>
         </SidebarHeader>
         <SidebarContent>{chats}</SidebarContent>
@@ -115,6 +118,7 @@ export function AppSidebar({
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>
+        <SidebarRail />
       </Sidebar>
       <BotDialog open={botDialogOpen} onOpenChange={setBotDialogOpen} />
       <CommandDialog open={searchOpen} onOpenChange={setSearchOpen}>
