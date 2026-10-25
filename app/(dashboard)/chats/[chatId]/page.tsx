@@ -18,7 +18,12 @@ export default async function ChatPage({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <ChatHeader bot={chat.bot} />
-      <Chat chatId={chat.id} name={chat.bot.name} avatar={chat.bot.avatar} />
+      <Chat
+        chatId={chat.id}
+        name={chat.bot.name}
+        avatar={chat.bot.avatar}
+        instructions={chat.bot.instructions}
+      />
     </div>
   )
 }

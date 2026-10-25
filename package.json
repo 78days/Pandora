@@ -18,6 +18,7 @@
     "@ai-sdk/google": "^4.0.105",
     "@ai-sdk/openai": "^4.0.102",
     "@ai-sdk/openai-compatible": "^3.0.78",
+    "@ai-sdk/otel": "^1.0.153",
     "@ai-sdk/react": "^4.0.157",
     "@ai-sdk/xai": "^5.0.30",
     "@base-ui/react": "^1.9.0",
