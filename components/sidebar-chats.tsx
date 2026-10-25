@@ -1,15 +1,13 @@
 import { formatDistanceToNowStrict } from "date-fns"
-import Link from "next/link"
 
 import { ChatCommandItem } from "@/components/chat-command-item"
-import { ChatAvatar } from "@/components/chat-avatar"
+import { ChatSidebarItem } from "@/components/chat-sidebar-item"
 import { CommandEmpty, CommandGroup } from "@/components/ui/command"
 import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarMenu,
-  SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
 } from "@/components/ui/sidebar"
@@ -30,26 +28,14 @@ async function SidebarChats() {
       <SidebarGroupContent>
         <SidebarMenu>
           {chats.map((chat) => (
-            <SidebarMenuItem key={chat.id}>
-              <SidebarMenuButton
-                size="lg"
-                tooltip={chat.botName}
-                render={<Link href={`/chats/${chat.id}`} />}
-              >
-                <ChatAvatar seed={chat.botAvatar} />
-                <div className="grid flex-1 gap-0.5 text-left leading-tight group-data-[collapsible=icon]:hidden">
-                  <span className="truncate font-medium">{chat.botName}</span>
-                  {chat.lastMessagePreview && (
-                    <span className="truncate text-xs text-muted-foreground">
-                      {chat.lastMessagePreview}
-                    </span>
-                  )}
-                </div>
-                <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-                  {relativeTime(chat.lastMessageAt)}
-                </span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
+            <ChatSidebarItem
+              key={chat.id}
+              chatId={chat.id}
+              botName={chat.botName}
+              botAvatar={chat.botAvatar}
+              lastMessagePreview={chat.lastMessagePreview}
+              timeLabel={relativeTime(chat.lastMessageAt)}
+            />
           ))}
         </SidebarMenu>
       </SidebarGroupContent>

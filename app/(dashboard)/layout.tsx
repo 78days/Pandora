@@ -7,7 +7,7 @@ import {
   SidebarChats,
   SidebarChatsSkeleton,
 } from "@/components/sidebar-chats"
-import { SidebarProvider } from "@/components/ui/sidebar"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 
 export default async function DashboardLayout({
   children,
@@ -31,7 +31,7 @@ export default async function DashboardLayout({
           </Suspense>
         }
       />
-      <main>{children}</main>
+      <SidebarInset>{children}</SidebarInset>
     </SidebarProvider>
   )
 }
