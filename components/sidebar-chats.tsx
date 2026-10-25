@@ -1,11 +1,9 @@
 import { formatDistanceToNowStrict } from "date-fns"
+import Link from "next/link"
 
+import { ChatCommandItem } from "@/components/chat-command-item"
 import { ChatAvatar } from "@/components/chat-avatar"
-import {
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-} from "@/components/ui/command"
+import { CommandEmpty, CommandGroup } from "@/components/ui/command"
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -33,7 +31,10 @@ async function SidebarChats() {
         <SidebarMenu>
           {chats.map((chat) => (
             <SidebarMenuItem key={chat.id}>
-              <SidebarMenuButton size="lg">
+              <SidebarMenuButton
+                size="lg"
+                render={<Link href={`/chats/${chat.id}`} />}
+              >
                 <ChatAvatar seed={chat.botAvatar} />
                 <div className="grid flex-1 gap-0.5 text-left leading-tight">
                   <span className="truncate font-medium">{chat.botName}</span>
@@ -65,10 +66,12 @@ async function CommandChats() {
     <>
       <CommandGroup heading="Chats">
         {chats.map((chat) => (
-          <CommandItem key={chat.id} value={chat.botName}>
-            <ChatAvatar seed={chat.botAvatar} />
-            <span>{chat.botName}</span>
-          </CommandItem>
+          <ChatCommandItem
+            key={chat.id}
+            chatId={chat.id}
+            botName={chat.botName}
+            botAvatar={chat.botAvatar}
+          />
         ))}
       </CommandGroup>
       <CommandEmpty>No chats found.</CommandEmpty>

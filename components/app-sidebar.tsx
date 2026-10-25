@@ -2,9 +2,10 @@
 
 import { UserButton } from "@clerk/nextjs"
 import { PlusIcon, SearchIcon, UsersIcon } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 
 import { BotDialog } from "@/components/bot-dialog"
+import { CloseSearchDialogProvider } from "@/components/chat-command-item"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -39,6 +40,7 @@ export function AppSidebar({
 }) {
   const [botDialogOpen, setBotDialogOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const closeSearchDialog = useCallback(() => setSearchOpen(false), [])
 
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -118,7 +120,11 @@ export function AppSidebar({
       <CommandDialog open={searchOpen} onOpenChange={setSearchOpen}>
         <Command>
           <CommandInput placeholder="Search chats..." />
-          <CommandList>{searchChats}</CommandList>
+          <CommandList>
+            <CloseSearchDialogProvider close={closeSearchDialog}>
+              {searchChats}
+            </CloseSearchDialogProvider>
+          </CommandList>
         </Command>
       </CommandDialog>
     </>
