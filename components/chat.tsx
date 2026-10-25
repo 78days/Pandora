@@ -6,7 +6,7 @@ import {
   useTriggerChatTransport,
   type InferChatUIMessage,
 } from "@trigger.dev/sdk/chat/react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import {
   loadChatTranscript,
@@ -42,6 +42,21 @@ import type { pandoraChat } from "@/trigger/chat"
 
 type ChatMessage = InferChatUIMessage<typeof pandoraChat>
 
+// Total text across messages — a "who has more content" measure that still
+// works when counts tie (a partially streamed answer on screen vs the saved
+// complete answer in the transcript) and never adopts a shorter history
+// (the transcript fetch is capped at the most recent 100 messages).
+function textVolume(
+  messages: readonly { parts: readonly { type: string; text?: string }[] }[]
+) {
+  return messages.reduce(
+    (total, message) =>
+      total +
+      message.parts.reduce((sum, part) => sum + (part.text?.length ?? 0), 0),
+    0
+  )
+}
+
 type Load =
   | { chatId: string; status: "loading" }
   | { chatId: string; status: "error"; message: string }
@@ -49,9 +64,10 @@ type Load =
       chatId: string
       status: "ready"
       initialMessages: ChatMessage[]
-      // Hydrating the session (without `isStreaming`) is what lets `resume`
-      // reconnect to a turn that is still generating after a reload.
+      // Hydrating the session (without `isStreaming`) is what lets the
+      // reconnect reattach to a turn that is still generating after a reload.
       initialSessions?: Record<string, ChatSessionPersistedState>
+      resumeError?: string
     }
 
 export function Chat({
@@ -77,10 +93,11 @@ export function Chat({
 
         let initialSessions:
           Record<string, ChatSessionPersistedState> | undefined
+        let resumeError: string | undefined
         if (transcript.messages.length > 0) {
           try {
-            // Idempotent on (env, chatId). The token lets `resume` subscribe
-            // without waiting for a send; without `isStreaming` the reconnect
+            // Idempotent on (env, chatId). The token lets the reconnect
+            // subscribe without waiting for a send; without `isStreaming` it
             // opens the stream and the server closes it fast if settled.
             const session = await startChatSession({
               chatId,
@@ -92,8 +109,9 @@ export function Chat({
                 lastEventId: transcript.cursors?.lastOutEventId,
               },
             }
-          } catch {
+          } catch (error) {
             // Resume is best-effort; the chat works without it.
+            resumeError = error instanceof Error ? error.message : String(error)
           }
         }
 
@@ -103,6 +121,7 @@ export function Chat({
             status: "ready",
             initialMessages: transcript.messages,
             initialSessions,
+            resumeError,
           })
         }
       } catch (error) {
@@ -151,6 +170,7 @@ export function Chat({
       instructions={instructions}
       initialMessages={current.initialMessages}
       initialSessions={current.initialSessions}
+      resumeError={current.resumeError}
     />
   )
 }
@@ -162,6 +182,7 @@ function ChatView({
   instructions,
   initialMessages,
   initialSessions,
+  resumeError,
 }: {
   chatId: string
   name: string
@@ -169,7 +190,11 @@ function ChatView({
   instructions: string | null
   initialMessages: ChatMessage[]
   initialSessions?: Record<string, ChatSessionPersistedState>
+  resumeError?: string
 }) {
+  // TEMPORARY debug strip data — counts of transport lifecycle events.
+  const [streamEvents, setStreamEvents] = useState<Record<string, number>>({})
+
   const transport = useTriggerChatTransport<typeof pandoraChat>({
     task: "pandora-chat",
     accessToken: ({ chatId }) => mintChatAccessToken(chatId),
@@ -179,6 +204,12 @@ function ChatView({
     // Ownership is enforced server-side in the actions.
     clientData: { instructions },
     sessions: initialSessions,
+    onEvent: (event) => {
+      setStreamEvents((prev) => ({
+        ...prev,
+        [event.type]: (prev[event.type] ?? 0) + 1,
+      }))
+    },
   })
 
   const {
@@ -187,13 +218,114 @@ function ChatView({
     status,
     error,
     stop: aiStop,
+    setMessages,
+    resumeStream,
   } = useChat({
     id: chatId,
     messages: initialMessages,
     transport,
-    // Reconnect to an in-flight stream after a page reload.
-    resume: initialMessages.length > 0,
+    // NOTE: no automatic `resume` here. Under React strict mode (default in
+    // next dev) the SDK's internal resume effect double-fires, and the second
+    // makeRequest aborts the first one's reconnect — the transport then
+    // cancels the SSE subscription it had just opened. The reloaded page ends
+    // up with no live stream. We fire the reconnect once, manually, below.
   })
+
+  // Reconnect to an in-flight turn exactly once per chat. The ref survives
+  // strict mode's double mount, so the second effect run skips.
+  const resumedForRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (resumedForRef.current === chatId) return
+    if (initialMessages.length === 0) return
+    resumedForRef.current = chatId
+    void resumeStream()
+  }, [chatId, initialMessages.length, resumeStream])
+
+  // A resume can miss the answer: the reconnect may close empty when the turn
+  // settled between the transcript load and the reconnect, or be skipped
+  // outright (React strict mode double-fires the resume effect). The durable
+  // transcript is the source of truth for settled turns, so every time the
+  // chat goes quiet, adopt it if the server knows more messages than the
+  // screen does.
+  const statusRef = useRef(status)
+  const reconcilingRef = useRef(false)
+
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
+
+  useEffect(() => {
+    if (status !== "ready") return
+    if (initialMessages.length === 0) return
+    if (reconcilingRef.current) return
+    reconcilingRef.current = true
+
+    void (async () => {
+      try {
+        const transcript = await loadChatTranscript({ chatId })
+        // A send or a resumed stream taking over means live state is
+        // fresher than any snapshot; leave it alone.
+        if (statusRef.current !== "ready") return
+        setMessages((currentMessages) =>
+          textVolume(transcript.messages) <= textVolume(currentMessages)
+            ? currentMessages
+            : transcript.messages
+        )
+      } catch {
+        // Best-effort; the transcript is re-checked on the next settle.
+      } finally {
+        reconcilingRef.current = false
+      }
+    })()
+  }, [status, chatId, initialMessages.length, setMessages])
+
+  // History that ends with an unanswered user message means a turn is (or
+  // was) still generating server-side — the transcript was loaded mid-turn.
+  // The resume stream should deliver the answer live, but when it doesn't
+  // (reconnect closed empty, strict-mode double-fire, or the turn settles
+  // after load), status may never change again, so nothing above re-checks.
+  // Poll the durable transcript until the saved answer appears.
+  const awaitingAnswer =
+    initialMessages.length > 0 &&
+    initialMessages[initialMessages.length - 1]?.role === "user"
+
+  useEffect(() => {
+    if (!awaitingAnswer) return
+
+    let cancelled = false
+
+    const poll = async () => {
+      // ~5 minutes; a stopped or failed turn still saves a final state.
+      for (let attempt = 0; attempt < 150 && !cancelled; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        if (cancelled) return
+        // A live send or resumed stream owns the screen; stand down.
+        if (statusRef.current !== "ready") return
+        try {
+          const transcript = await loadChatTranscript({ chatId })
+          if (cancelled) return
+          const last = transcript.messages[transcript.messages.length - 1]
+          if (last && last.role !== "user") {
+            if (statusRef.current === "ready") {
+              setMessages((currentMessages) =>
+                textVolume(transcript.messages) <= textVolume(currentMessages)
+                  ? currentMessages
+                  : transcript.messages
+              )
+            }
+            return
+          }
+        } catch {
+          // Transient fetch failure — try again on the next tick.
+        }
+      }
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+    }
+  }, [awaitingAnswer, chatId, setMessages])
 
   // useChat's stop() alone doesn't reach the backend after a resume.
   const stop = useCallback(() => {
@@ -203,6 +335,10 @@ function ChatView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {/* TEMPORARY debug strip — remove once reload-resume is confirmed. */}
+      <div className="border-b border-dashed px-4 py-1 font-mono text-[10px] text-muted-foreground">
+        {`session=${initialSessions ? "ok" : resumeError ? `failed: ${resumeError}` : "none"} status=${status} msgs=${messages.length} events=${JSON.stringify(streamEvents)}`}
+      </div>
       <Conversation className="min-h-0 flex-1">
         {messages.length === 0 ? (
           <ConversationEmptyState

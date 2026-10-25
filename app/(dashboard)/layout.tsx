@@ -18,7 +18,10 @@ export default async function DashboardLayout({
   const sidebarState = (await cookies()).get("sidebar_state")
 
   return (
-    <SidebarProvider defaultOpen={sidebarState?.value !== "false"}>
+    <SidebarProvider
+      className="h-svh"
+      defaultOpen={sidebarState?.value !== "false"}
+    >
       <AppSidebar
         chats={
           <Suspense fallback={<SidebarChatsSkeleton />}>
