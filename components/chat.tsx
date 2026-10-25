@@ -6,6 +6,7 @@ import {
   useTriggerChatTransport,
   type InferChatUIMessage,
 } from "@trigger.dev/sdk/chat/react"
+import { CheckIcon, CopyIcon, RefreshCwIcon } from "lucide-react"
 import {
   useCallback,
   useEffect,
@@ -27,6 +28,8 @@ import {
 } from "@/components/ai-elements/conversation"
 import {
   Message,
+  MessageAction,
+  MessageActions,
   MessageContent,
   MessageResponse,
 } from "@/components/ai-elements/message"
@@ -44,6 +47,7 @@ import {
 } from "@/components/ai-elements/reasoning"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { ChatAvatar } from "@/components/chat-avatar"
+import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import type { pandoraChat } from "@/trigger/chat"
 
@@ -227,6 +231,7 @@ function ChatView({
     stop: aiStop,
     setMessages,
     resumeStream,
+    regenerate,
   } = useChat({
     id: chatId,
     messages: initialMessages,
@@ -256,6 +261,10 @@ function ChatView({
   // screen does.
   const statusRef = useRef(status)
   const reconcilingRef = useRef(false)
+  // A user-initiated regenerate must not be followed by transcript adoption:
+  // the durable log may still contain the replaced answer, and adopting it
+  // would resurrect it on screen.
+  const skipReconcileRef = useRef(false)
 
   useEffect(() => {
     statusRef.current = status
@@ -264,6 +273,10 @@ function ChatView({
   useEffect(() => {
     if (status !== "ready") return
     if (initialMessages.length === 0) return
+    if (skipReconcileRef.current) {
+      skipReconcileRef.current = false
+      return
+    }
     if (reconcilingRef.current) return
     reconcilingRef.current = true
 
@@ -339,6 +352,34 @@ function ChatView({
     aiStop()
     transport.stopGeneration(chatId)
   }, [aiStop, chatId, transport])
+
+  // Resend the last user turn for a fresh answer (also serves as Retry when
+  // the previous attempt errored). The transport marks it
+  // "regenerate-message" and the agent slices its own history server-side.
+  const regenerateLast = useCallback(() => {
+    skipReconcileRef.current = true
+    void regenerate()
+  }, [regenerate])
+
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const copyMessage = useCallback(async (message: ChatMessage) => {
+    const text = message.parts
+      .filter((part) => part.type === "text")
+      .map((part) => ("text" in part ? part.text : ""))
+      .join("\n")
+      .trim()
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      return
+    }
+    setCopiedId(message.id)
+    window.setTimeout(
+      () => setCopiedId((current) => (current === message.id ? null : current)),
+      2000
+    )
+  }, [])
 
   // Composer is uncontrolled, so ↑/↓ recall writes the DOM value directly.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -423,32 +464,78 @@ function ChatView({
           />
         ) : (
           <ConversationContent>
-            {messages.map((message) => (
-              <Message from={message.role} key={message.id}>
-                <MessageContent>
-                  {message.parts.map((part, index) => {
-                    switch (part.type) {
-                      case "text":
-                        return (
-                          <MessageResponse key={index}>
-                            {part.text}
-                          </MessageResponse>
-                        )
-                      case "reasoning":
-                        return (
-                          <Reasoning
-                            key={index}
-                            isStreaming={part.state === "streaming"}
-                          >
-                            <ReasoningTrigger />
-                            <ReasoningContent>{part.text}</ReasoningContent>
-                          </Reasoning>
-                        )
-                    }
-                  })}
-                </MessageContent>
-              </Message>
-            ))}
+            {messages.map((message, index) => {
+              const isLastAssistant =
+                index === messages.length - 1 && message.role === "assistant"
+              return (
+                <Message from={message.role} key={message.id}>
+                  <MessageContent>
+                    {message.parts.map((part, partIndex) => {
+                      switch (part.type) {
+                        case "text":
+                          return (
+                            <MessageResponse key={partIndex}>
+                              {part.text}
+                            </MessageResponse>
+                          )
+                        case "reasoning":
+                          return (
+                            <Reasoning
+                              defaultOpen={false}
+                              isStreaming={part.state === "streaming"}
+                              key={partIndex}
+                            >
+                              <ReasoningTrigger />
+                              <ReasoningContent>{part.text}</ReasoningContent>
+                            </Reasoning>
+                          )
+                      }
+                    })}
+                  </MessageContent>
+                  {status !== "submitted" && (
+                    <MessageActions
+                      className={
+                        message.role === "user"
+                          ? "self-end opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+                          : isLastAssistant && status === "ready"
+                            ? "opacity-100 transition-opacity"
+                            : "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+                      }
+                    >
+                      <MessageAction
+                        onClick={() => void copyMessage(message)}
+                        tooltip={copiedId === message.id ? "Copied" : "Copy"}
+                      >
+                        {copiedId === message.id ? (
+                          <CheckIcon className="size-4" />
+                        ) : (
+                          <CopyIcon className="size-4" />
+                        )}
+                      </MessageAction>
+                      {isLastAssistant && status === "ready" && (
+                        <MessageAction
+                          onClick={regenerateLast}
+                          tooltip="Regenerate"
+                        >
+                          <RefreshCwIcon className="size-4" />
+                        </MessageAction>
+                      )}
+                    </MessageActions>
+                  )}
+                </Message>
+              )
+            })}
+            {status === "submitted" && (
+              <div
+                aria-label="Assistant is thinking"
+                className="flex items-center gap-1.5 px-1 py-2"
+                role="status"
+              >
+                <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground" />
+                <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground [animation-delay:150ms]" />
+                <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground [animation-delay:300ms]" />
+              </div>
+            )}
           </ConversationContent>
         )}
         <ConversationScrollButton />
@@ -495,9 +582,18 @@ function ChatView({
           </PromptInputFooter>
         </PromptInput>
         {error && (
-          <p className="mt-2 text-sm text-destructive">
-            Something went wrong: {error.message || "please try again."}
-          </p>
+          <div className="mt-2 flex items-center gap-3 text-sm text-destructive">
+            <p>Something went wrong: {error.message || "please try again."}</p>
+            <Button
+              onClick={regenerateLast}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <RefreshCwIcon />
+              Retry
+            </Button>
+          </div>
         )}
       </div>
     </div>

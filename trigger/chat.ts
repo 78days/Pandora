@@ -15,7 +15,25 @@ export const pandoraChat = chat.agent({
     streamText({
       model: chatModel,
       system: clientData?.instructions ?? undefined,
-      messages,
+      // The transcript stores each turn's reasoning parts; fed back to a
+      // reasoning model they get echoed — the previous answer reappeared
+      // verbatim inside the next turn's thinking. Only final answers belong
+      // in the model's context.
+      messages: messages.map((message) => {
+        if (
+          message.role !== "assistant" ||
+          typeof message.content === "string"
+        ) {
+          return message
+        }
+        return {
+          ...message,
+          content: message.content.filter(
+            (part) =>
+              part.type !== "reasoning" && part.type !== "reasoning-file"
+          ),
+        }
+      }),
       abortSignal: signal,
       maxOutputTokens: 8192,
     }),
