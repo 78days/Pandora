@@ -1,6 +1,6 @@
 # Pandora
 
-**A bot-powered chat workspace.** Give every bot a face, a name, and a job to do — then give it a space to work.
+**A bot-powered chat workspace.** Give every bot a face, a role, and instructions, then give it a place to work.
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?style=flat-square)
 ![React](https://img.shields.io/badge/React-19-149ECA?style=flat-square)
@@ -10,24 +10,42 @@
 ![Neon](https://img.shields.io/badge/Neon-Postgres-00E599?style=flat-square)
 ![Clerk](https://img.shields.io/badge/Clerk-Auth-6C47FF?style=flat-square)
 
-> **Status: early development.** Bot creation and persistence are implemented end to end. Messaging, chat navigation, and the bot runtime are next. The schema is still moving and development data is disposable.
+> **Project status: early development.** Bot creation and chat provisioning are implemented end to end, and existing chats are listed in the sidebar. Messaging, chat navigation, and the bot runtime are not built yet. The database schema is still changing and development data is disposable.
+
+## Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Tech stack](#tech-stack)
+- [Architecture](#architecture)
+- [Getting started](#getting-started)
+- [Scripts](#scripts)
+- [Project structure](#project-structure)
+- [Development conventions](#development-conventions)
+- [Current limitations](#current-limitations)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Acknowledgements](#acknowledgements)
 
 ## Overview
 
-Pandora is a Next.js application for creating custom bots and talking to them in chats. Each bot carries a deterministic avatar, a job description, and free-form working instructions. Creating a bot also creates its direct chat and membership in one atomic database batch, so a bot is ready to receive messages as soon as it exists.
+Pandora is a Next.js application for creating custom bots and talking to them in chats. Each bot has a deterministic avatar, a defined role, and free-form working instructions. Creating a bot also creates its direct chat and membership in one atomic database batch, so the bot is ready for a conversation as soon as it exists.
 
-Authentication is handled by Clerk, data lives in Neon Postgres, and the UI is built with Tailwind CSS and shadcn/ui on Base UI.
+Authentication is handled by Clerk, data lives in Neon Postgres, and the interface is built with Tailwind CSS and shadcn/ui components on Base UI. Drizzle provides typed database access, including a single Zod schema shared by the client form and the server action.
 
-## What works today
+The messaging layer is the next milestone. Today the application covers identity, bot creation, and the workspace shell that messaging will live in.
 
-- **Authenticated workspace** — the home route is protected with `auth.protect()` and Clerk middleware in `proxy.ts`.
-- **Bot creation dialog** — an accessible, dark-mode-ready dialog with validation, pending state, and error handling.
-- **Bot presets** — Research assistant, Code reviewer, Writing editor, and Tutor fill the job and instructions in one click.
-- **Faces** — deterministic DiceBear `gaze` avatars generated locally from a seed; Shuffle replaces the seed.
-- **Shared validation** — one `drizzle-zod` insert schema powers both the client form and the server action.
-- **Atomic creation** — a bot, its direct chat, and the `chatMembers` link are written in a single Neon HTTP batch.
-- **Chat-ready data model** — direct and group conversations, ordered by `lastMessageAt`, with bot memberships and cascade cleanup.
-- **Theme support** — system light/dark theme with `next-themes`; press `d` anywhere outside a field to toggle.
+## Features
+
+- **Authenticated workspace.** The application is protected by Clerk middleware and `auth.protect()`; the sidebar shows the signed-in user.
+- **Bot creation.** A validated, accessible dialog captures a name, role, and working instructions, with pending state and server error handling.
+- **Presets.** Research assistant, Code reviewer, Writing editor, and Tutor fill the role and instructions in one click. Presets still pass through validation.
+- **Deterministic avatars.** Each bot stores a seed and renders a DiceBear `gaze` avatar locally as an SVG data URI. Shuffle generates a new seed.
+- **Shared validation.** A single `drizzle-zod` insert schema (`botsInsertSchema`) powers both the React Hook Form resolver and the server action.
+- **Atomic provisioning.** A bot, its direct chat, and the `chatMembers` link are written in one Neon HTTP batch.
+- **Chat sidebar.** Chats are listed newest first, resolved to their bot name, avatar, and last-message preview, with a Suspense skeleton while loading.
+- **Chat search.** `⌘K` / `Ctrl+K` opens a command dialog listing the user's chats.
+- **Theming.** System light/dark theme via `next-themes`; press `d` outside a text field to toggle.
 
 ## Tech stack
 
@@ -46,37 +64,34 @@ Authentication is handled by Clerk, data lives in Neon Postgres, and the UI is b
 
 ## Architecture
 
+### Route and data flow
+
 ```text
-┌────────────────────────┐        ┌──────────────────────────┐
-│  app/page.tsx (RSC)    │        │  components/bot-dialog    │
-│  auth.protect()        │───────▶│  RHF + Zod + shadcn Field │
-└────────────────────────┘        └────────────┬─────────────┘
-                                               │ createBot(values)
-                                               ▼
-                                  ┌──────────────────────────┐
-                                  │  actions/bot.ts          │
-                                  │  auth() → userId         │
-                                  │  schema.parse(input)     │
-                                  └────────────┬─────────────┘
-                                               │ db.batch([...])
-                                               ▼
-                                  ┌──────────────────────────┐
-                                  │  Neon Postgres           │
-                                  │  bots, chats, members    │
-                                  └──────────────────────────┘
+app/(dashboard)/layout.tsx
+└── SidebarProvider
+    ├── AppSidebar (client)
+    │   ├── SidebarChats (RSC) ─────┐
+    │   ├── CommandChats (RSC) ─────┤── getSidebarChats() ── Neon Postgres
+    │   └── BotDialog ──▶ actions/bot.ts ──▶ db.batch([...])
+    └── main
+        └── app/(dashboard)/page.tsx (RSC, auth.protect())
+            └── BotDialog
 ```
+
+The sidebar and the command palette render as server components inside Suspense boundaries. Both call `getSidebarChats`, which is memoized with React `cache`, so a single request performs one query even though two components read the result.
 
 ### Bot creation flow
 
 1. The dialog validates input locally with `botsInsertSchema` and React Hook Form.
 2. `createBot` resolves the Clerk `userId` on the server and rejects unauthenticated calls.
-3. The action re-parses the input, generates the bot and chat IDs with `nanoid`, then runs three inserts through `db.batch`:
+3. The action re-parses the input and generates the bot and chat IDs with `nanoid`.
+4. Three writes run through `db.batch`:
    - the bot row,
    - a `direct` chat owned by the same user,
    - the `chatMembers` row linking them.
-4. The action returns `{ bot, chat }`; the dialog resets and closes.
+5. The action returns `{ bot, chat }`. The dialog resets, closes, and refreshes the route so the sidebar picks up the new chat.
 
-The batch is the atomic unit because the `neon-http` driver does not support interactive transactions. Generating both IDs in the action makes it possible to reference them inside the same batch.
+The batch is the atomic unit because the `neon-http` driver does not support interactive transactions. Both IDs are generated in the action so they can be referenced inside the same batch.
 
 ### Data model
 
@@ -113,23 +128,22 @@ erDiagram
     }
 ```
 
-Notes:
-
 - `bots.user_id` and `chats.user_id` hold Clerk user IDs. There is no local users table and no foreign key to one.
-- `chats.kind` is a Postgres enum: `direct` or `group`. Direct chats leave `name` null and render the bot's name instead.
+- `bots.avatar` stores a DiceBear seed, not an image.
+- `chats.kind` is a Postgres enum with `direct` and `group` values. Direct chats leave `name` null and display the bot's name instead.
 - `chat_members` uses a composite primary key on `(chat_id, bot_id)`. Both foreign keys cascade on delete, and `bot_id` is indexed for reverse lookups.
-- `last_message_at` and `last_message_preview` are ready for inbox ordering and previews once messages exist.
+- `chats.last_message_at` defaults to the creation time, so new chats sort to the top of the sidebar. `last_message_preview` is ready for previews once messages exist.
 - `bots.sandbox_id` is reserved for a future execution runtime.
-- `db/schema.ts` also exports Drizzle relations, so nested reads work: `db.query.chats.findMany({ with: { members: { with: { bot: true } } } })`.
+- `db/schema.ts` also exports Drizzle relations, enabling nested reads such as `db.query.chats.findMany({ with: { members: { with: { bot: true } } } })`.
 
 ## Getting started
 
 ### Prerequisites
 
-- Node.js 22 or newer
+- Node.js 20.9 or newer (22 LTS recommended)
 - npm
 - A [Neon](https://neon.tech) Postgres project
-- A [Clerk](https://clerk.com) application (development instance is fine)
+- A [Clerk](https://clerk.com) application (a development instance is sufficient)
 
 ### 1. Install dependencies
 
@@ -143,7 +157,7 @@ If npm reports an `ERESOLVE` conflict around an optional `effect` peer dependenc
 npm install --legacy-peer-deps
 ```
 
-### 2. Configure `.env.local`
+### 2. Configure the environment
 
 Create `.env.local` in the project root:
 
@@ -164,14 +178,14 @@ NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL="/"
 
 | Variable                                          | Required | Purpose                                                 |
 | ------------------------------------------------- | -------- | ------------------------------------------------------- |
-| `DATABASE_URL`                                    | Yes      | Pooled connection used by the app at runtime            |
+| `DATABASE_URL`                                    | Yes      | Pooled connection used by the application at runtime    |
 | `DATABASE_URL_UNPOOLED`                           | Yes      | Direct connection used by `drizzle-kit push` and Studio |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`               | Yes      | Clerk client key                                        |
 | `CLERK_SECRET_KEY`                                | Yes      | Clerk server key                                        |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_URL`                   | No       | Sign-in route, `/sign-in`                               |
 | `NEXT_PUBLIC_CLERK_SIGN_UP_URL`                   | No       | Sign-up route, `/sign-up`                               |
-| `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | No       | Where to land after sign-in, `/`                        |
-| `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | No       | Where to land after sign-up, `/`                        |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | No       | Redirect target after sign-in, `/`                      |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | No       | Redirect target after sign-up, `/`                      |
 | `NEON_BRANCH`                                     | No       | Target branch for the Neon CLI / branch workflow        |
 
 ### 3. Push the schema
@@ -180,23 +194,23 @@ NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL="/"
 npm run db:push
 ```
 
-This project intentionally uses `drizzle-kit push` instead of migration files. Schema changes are applied directly and old development data is not preserved.
+This project uses `drizzle-kit push` instead of migration files. Schema changes are applied directly, and existing development data is not preserved.
 
-### 4. Run the app
+### 4. Start the development server
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), sign up, and create your first bot.
+Open [http://localhost:3000](http://localhost:3000), sign up, and create a bot.
 
 ## Scripts
 
 | Command             | Description                                   |
 | ------------------- | --------------------------------------------- |
-| `npm run dev`       | Start the Next.js dev server with Turbopack   |
+| `npm run dev`       | Start the Next.js development server          |
 | `npm run build`     | Create a production build                     |
-| `npm run start`     | Run the production build                      |
+| `npm run start`     | Serve the production build                    |
 | `npm run lint`      | Run ESLint                                    |
 | `npm run typecheck` | Run `tsc --noEmit`                            |
 | `npm run format`    | Format TypeScript and TSX files with Prettier |
@@ -207,55 +221,63 @@ Open [http://localhost:3000](http://localhost:3000), sign up, and create your fi
 
 ```text
 app/
-  page.tsx                    # Protected home / empty state
-  layout.tsx                  # Clerk, theme, tooltip, and toast providers
+  (dashboard)/
+    layout.tsx                # Sidebar shell and Suspense boundaries
+    page.tsx                  # Protected home route and empty state
   sign-in/[[...sign-in]]/     # Clerk sign-in route
   sign-up/[[...sign-up]]/     # Clerk sign-up route
+  layout.tsx                  # Clerk, theme, tooltip, and toast providers
   globals.css                 # Tailwind 4 theme tokens
 actions/
-  bot.ts                      # createBot server action (bot + chat + member)
+  bot.ts                      # createBot server action
 components/
+  app-sidebar.tsx             # Sidebar, navigation menu, search palette
   bot-dialog.tsx              # Bot creation form and dialog
-  chat-avatar.tsx             # DiceBear gaze avatar
-  theme-provider.tsx          # next-themes + keyboard toggle
+  chat-avatar.tsx             # DiceBear avatar renderer
+  sidebar-chats.tsx           # Sidebar and command-dialog chat lists
+  theme-provider.tsx          # next-themes with keyboard toggle
   ui/                         # shadcn/ui (Base UI) primitives
 db/
   index.ts                    # Drizzle client (Neon HTTP)
   schema.ts                   # Tables, enum, insert schema, relations
 hooks/                        # Shared React hooks
 lib/                          # Utilities
+queries/
+  bots.ts                     # Request-cached sidebar chat query
 proxy.ts                      # Clerk middleware (Next.js 16 proxy)
 drizzle.config.ts             # drizzle-kit configuration
 neon.ts                       # Neon CLI branch configuration
 AGENTS.md                     # Development conventions
 ```
 
-## Implementation notes
+## Development conventions
 
-- **Auth is checked at the boundary.** Server actions are public endpoints; `createBot` calls `auth()` and throws unless a `userId` is present. The client never supplies its own user ID.
-- **Validation lives next to the table.** `botsInsertSchema` is generated from `bots` with `drizzle-zod`, omits server-managed columns, and is shared by the form and action.
-- **Forms follow the house pattern.** React Hook Form with `zodResolver`, shadcn `Field` primitives, `FieldError` for messages, `useWatch` for rendered values, and a reset when the dialog closes. See `AGENTS.md`.
-- **The dialog owns its trigger.** `app/page.tsx` renders `<BotDialog />` rather than wiring open state itself.
-- **UI components are Base UI primitives.** The project uses the shadcn `base-nova` style; components live in `components/ui`.
-- **Avatars are generated locally.** `ChatAvatar` renders the DiceBear SVG as a data URI through `next/image`, so avatars work without an external avatar API.
+The full conventions live in [`AGENTS.md`](./AGENTS.md). In short:
+
+- **Authorize at the boundary.** Server actions are public endpoints. Read `userId` from `auth()` and fail when it is missing; never accept a user ID from the client.
+- **Define validation next to the table.** Generate insert schemas with `drizzle-zod`, omit server-managed columns, and share the schema between client and server.
+- **Follow the form pattern.** React Hook Form with `zodResolver`, shadcn `Field` primitives, `FieldError` for messages, `useWatch` for rendered values, and a reset when the dialog closes.
+- **Database changes use `db:push`.** Do not create migration files in this project.
 
 ## Current limitations
 
-- There is no messages table, message transport, or chat UI yet. Newly created chats cannot be opened from the interface.
-- The home page always shows the empty state; there is no bot or chat list.
-- Bots are personas only. Nothing executes instructions or uses `bots.sandbox_id` yet.
+- There is no messages table, message transport, or chat route. Sidebar entries are display-only and cannot be opened.
+- The home route always renders the empty state, even when chats already exist. There is no bot list, editing, or deletion flow.
+- Group chat creation is a menu placeholder with no implementation.
+- Bots are personas only. Instructions are stored, but nothing executes them, and `bots.sandbox_id` is unused.
 - Authorization is enforced in application code. Postgres row-level security is not configured.
-- There are no automated tests or CI workflows yet.
+- There are no automated tests or CI workflows.
 
 ## Roadmap
 
-### Next
+### Near term
 
-- [ ] Chat sidebar listing direct and group chats, sorted by `lastMessageAt`
 - [ ] `/chats/[chatId]` route with conversation history
-- [ ] `messages` table plus composer and persistence
+- [ ] `messages` table, composer, and message persistence
+- [ ] Sidebar navigation with active-chat state
 - [ ] Update `lastMessagePreview` and `lastMessageAt` when a message is sent
 - [ ] Bot editing, deletion, and archive flows
+- [ ] Group chat creation with multiple bot members
 
 ### Chat experience
 
@@ -272,8 +294,7 @@ AGENTS.md                     # Development conventions
 - [ ] Memory and persona editing
 - [ ] Sandbox-backed tool execution using `bots.sandboxId`
 - [ ] Tool permissions with explicit approval prompts
-- [ ] Group chats with multiple bot members
-- [ ] Reusable bot templates and presets
+- [ ] Reusable bot templates
 
 ### Platform
 
@@ -286,9 +307,9 @@ AGENTS.md                     # Development conventions
 
 ## Contributing
 
-This is a development project with no backwards-compatibility guarantees. Before changing schema or form code, read [`AGENTS.md`](./AGENTS.md) for the database, forms, Git, and DiceBear conventions.
+This is a development project with no backwards-compatibility guarantees. Read [`AGENTS.md`](./AGENTS.md) before changing schema, forms, or Git workflow.
 
-Before opening a change, run:
+Before submitting a change, run:
 
 ```bash
 npm run typecheck
