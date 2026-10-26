@@ -5,10 +5,12 @@ import { useState } from "react"
 
 import { BotDialog, type EditableBot } from "@/components/bot-dialog"
 import { ChatAvatar } from "@/components/chat-avatar"
+import { useDesktopPanel } from "@/components/chat-panels"
 import { Button } from "@/components/ui/button"
 
 function ChatHeader({ bot }: { bot: EditableBot }) {
   const [editOpen, setEditOpen] = useState(false)
+  const desktop = useDesktopPanel()
 
   return (
     <>
@@ -27,6 +29,8 @@ function ChatHeader({ bot }: { bot: EditableBot }) {
           size="icon"
           className="ml-auto text-white hover:bg-white/10 hover:text-white"
           aria-label="Desktop view"
+          aria-pressed={desktop.open}
+          onClick={desktop.toggle}
         >
           <MonitorIcon />
         </Button>
