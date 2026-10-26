@@ -22,7 +22,9 @@ export default async function ChatPage({
         chatId={chat.id}
         name={chat.bot.name}
         avatar={chat.bot.avatar}
+        job={chat.bot.job}
         instructions={chat.bot.instructions}
+        sandboxId={chat.bot.sandboxId}
       />
     </div>
   )

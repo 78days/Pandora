@@ -6,6 +6,7 @@ import {
   useTriggerChatTransport,
   type InferChatUIMessage,
 } from "@trigger.dev/sdk/chat/react"
+import type { ToolUIPart } from "ai"
 import { CheckIcon, CopyIcon, RefreshCwIcon } from "lucide-react"
 import {
   useCallback,
@@ -13,6 +14,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react"
 
 import {
@@ -20,6 +22,7 @@ import {
   mintChatAccessToken,
   startChatSession,
 } from "@/actions/chat"
+import { CodeBlock } from "@/components/ai-elements/code-block"
 import {
   Conversation,
   ConversationContent,
@@ -46,6 +49,7 @@ import {
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning"
 import { Shimmer } from "@/components/ai-elements/shimmer"
+import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import { ChatAvatar } from "@/components/chat-avatar"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
@@ -85,12 +89,16 @@ export function Chat({
   chatId,
   name,
   avatar,
+  job,
   instructions,
+  sandboxId,
 }: {
   chatId: string
   name: string
   avatar: string
+  job: string
   instructions: string | null
+  sandboxId: string | null
 }) {
   const [load, setLoad] = useState<Load>({ chatId, status: "loading" })
 
@@ -112,7 +120,7 @@ export function Chat({
             // opens the stream and the server closes it fast if settled.
             const session = await startChatSession({
               chatId,
-              clientData: { instructions },
+              clientData: { name, job, instructions, sandboxId },
             })
             initialSessions = {
               [chatId]: {
@@ -130,7 +138,7 @@ export function Chat({
           setLoad({
             chatId,
             status: "ready",
-            initialMessages: transcript.messages,
+            initialMessages: transcript.messages as ChatMessage[],
             initialSessions,
             resumeError,
           })
@@ -150,7 +158,7 @@ export function Chat({
     return () => {
       cancelled = true
     }
-  }, [chatId, instructions])
+  }, [chatId, name, job, instructions, sandboxId])
 
   // State from a previous chatId (navigating between chats) counts as loading.
   const current = load.chatId === chatId ? load : null
@@ -178,7 +186,9 @@ export function Chat({
       chatId={chatId}
       name={name}
       avatar={avatar}
+      job={job}
       instructions={instructions}
+      sandboxId={sandboxId}
       initialMessages={current.initialMessages}
       initialSessions={current.initialSessions}
       resumeError={current.resumeError}
@@ -190,7 +200,9 @@ function ChatView({
   chatId,
   name,
   avatar,
+  job,
   instructions,
+  sandboxId,
   initialMessages,
   initialSessions,
   resumeError,
@@ -198,7 +210,9 @@ function ChatView({
   chatId: string
   name: string
   avatar: string
+  job: string
   instructions: string | null
+  sandboxId: string | null
   initialMessages: ChatMessage[]
   initialSessions?: Record<string, ChatSessionPersistedState>
   resumeError?: string
@@ -213,7 +227,7 @@ function ChatView({
       startChatSession({ chatId, clientData }),
     // Untrusted input by design: it only shapes the bot's personality.
     // Ownership is enforced server-side in the actions.
-    clientData: { instructions },
+    clientData: { name, job, instructions, sandboxId },
     sessions: initialSessions,
     onEvent: (event) => {
       setStreamEvents((prev) => ({
@@ -289,7 +303,7 @@ function ChatView({
         setMessages((currentMessages) =>
           textVolume(transcript.messages) <= textVolume(currentMessages)
             ? currentMessages
-            : transcript.messages
+            : (transcript.messages as ChatMessage[])
         )
       } catch {
         // Best-effort; the transcript is re-checked on the next settle.
@@ -330,7 +344,7 @@ function ChatView({
               setMessages((currentMessages) =>
                 textVolume(transcript.messages) <= textVolume(currentMessages)
                   ? currentMessages
-                  : transcript.messages
+                  : (transcript.messages as ChatMessage[])
               )
             }
             return
@@ -490,6 +504,14 @@ function ChatView({
                             </Reasoning>
                           )
                       }
+
+                      if (part.type.startsWith("tool-")) {
+                        // The agent's own eyes: never part of the visible chat.
+                        if (part.type === "tool-view_screen") return null
+                        return (
+                          <ToolCall part={part as ToolUIPart} key={partIndex} />
+                        )
+                      }
                     })}
                   </MessageContent>
                   {status !== "submitted" && (
@@ -598,4 +620,228 @@ function ChatView({
       </div>
     </div>
   )
+}
+
+const toolTitles: Record<string, string> = {
+  bash: "Ran a command",
+  read_file: "Read a file",
+  write_file: "Wrote a file",
+  list_files: "Listed files",
+  mouse_click: "Clicked",
+  mouse_move: "Moved the mouse",
+  mouse_scroll: "Scrolled",
+  keyboard_type: "Typed text",
+  keyboard_press: "Pressed a key",
+  show_screen: "Showed the screen",
+}
+
+function field(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null && key in value
+    ? (value as Record<string, unknown>)[key]
+    : undefined
+}
+
+const asText = (value: unknown) => (typeof value === "string" ? value : "")
+const asNumber = (value: unknown) => (typeof value === "number" ? value : 0)
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function ToolLine({ children }: { children: ReactNode }) {
+  return <p className="font-mono text-xs break-words">{children}</p>
+}
+
+function ToolNote({ children }: { children: ReactNode }) {
+  return <p className="text-sm text-muted-foreground">{children}</p>
+}
+
+function OutputBlock({ children }: { children: ReactNode }) {
+  return (
+    <pre className="max-h-80 overflow-auto rounded-md bg-muted/50 p-3 font-mono text-xs whitespace-pre-wrap">
+      {children}
+    </pre>
+  )
+}
+
+// One renderer for every sandbox tool. The backend's `toModelOutput` keeps
+// screenshots out of the model context for view_screen, but the raw output
+// still arrives here — only show_screen draws it.
+function ToolCall({ part }: { part: ToolUIPart }) {
+  const name = part.type.slice(5)
+  const input = "input" in part ? part.input : undefined
+  const output = part.state === "output-available" ? part.output : undefined
+  const errorText = part.state === "output-error" ? part.errorText : undefined
+
+  return (
+    <Tool defaultOpen={name === "show_screen" || Boolean(errorText)}>
+      <ToolHeader
+        state={part.state}
+        title={toolTitles[name] ?? name}
+        type={part.type}
+      />
+      <ToolContent>
+        <ToolDetails input={input} name={name} output={output} />
+        {errorText && (
+          <p className="text-sm break-words text-destructive">{errorText}</p>
+        )}
+      </ToolContent>
+    </Tool>
+  )
+}
+
+function ToolDetails({
+  name,
+  input,
+  output,
+}: {
+  name: string
+  input: unknown
+  output: unknown
+}) {
+  switch (name) {
+    case "bash": {
+      const command = asText(field(input, "command"))
+      return (
+        <div className="space-y-3">
+          {command && <CodeBlock code={command} language="bash" />}
+          {output !== undefined && (
+            <>
+              <OutputBlock>
+                {asText(field(output, "output")) || "(no output)"}
+              </OutputBlock>
+              <ToolNote>
+                Exit code {String(field(output, "exitCode") ?? 0)}
+              </ToolNote>
+            </>
+          )}
+        </div>
+      )
+    }
+
+    case "read_file": {
+      const binary = field(output, "binary") === true
+      return (
+        <div className="space-y-2">
+          <ToolLine>{asText(field(input, "path"))}</ToolLine>
+          {output !== undefined &&
+            (binary ? (
+              <ToolNote>
+                Binary file ({formatBytes(asNumber(field(output, "bytes")))}).
+              </ToolNote>
+            ) : (
+              <OutputBlock>{asText(field(output, "content"))}</OutputBlock>
+            ))}
+        </div>
+      )
+    }
+
+    case "write_file":
+      return (
+        <div className="space-y-2">
+          <ToolLine>{asText(field(input, "path"))}</ToolLine>
+          {output !== undefined && (
+            <ToolNote>
+              Wrote {formatBytes(asNumber(field(output, "bytes")))}.
+            </ToolNote>
+          )}
+        </div>
+      )
+
+    case "list_files": {
+      const entries = Array.isArray(field(output, "entries"))
+        ? (field(output, "entries") as unknown[])
+        : []
+      return (
+        <div className="space-y-2">
+          <ToolLine>{asText(field(input, "path")) || "."}</ToolLine>
+          {entries.length > 0 && (
+            <ul className="max-h-60 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-xs">
+              {entries.map((entry, index) => (
+                <li className="flex justify-between gap-4 py-0.5" key={index}>
+                  <span className="truncate">
+                    {asText(field(entry, "name"))}
+                    {field(entry, "type") === "dir" ? "/" : ""}
+                  </span>
+                  <span className="shrink-0 text-muted-foreground">
+                    {field(entry, "type") === "dir"
+                      ? "dir"
+                      : formatBytes(asNumber(field(entry, "size")))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )
+    }
+
+    case "mouse_click":
+      return (
+        <ToolLine>
+          {field(input, "double") === true ? "Double-clicked" : "Clicked"}{" "}
+          {asText(field(input, "button")) || "left"} at{" "}
+          {asNumber(field(input, "x"))}, {asNumber(field(input, "y"))}
+        </ToolLine>
+      )
+
+    case "mouse_move":
+      return (
+        <ToolLine>
+          Moved to {asNumber(field(input, "x"))}, {asNumber(field(input, "y"))}
+        </ToolLine>
+      )
+
+    case "mouse_scroll":
+      return (
+        <ToolLine>
+          Scrolled {asText(field(input, "direction"))} ×
+          {asNumber(field(input, "amount")) || 3} at{" "}
+          {asNumber(field(input, "x"))}, {asNumber(field(input, "y"))}
+        </ToolLine>
+      )
+
+    case "keyboard_type":
+      return (
+        <ToolLine>
+          Typed {JSON.stringify(asText(field(input, "text")))}
+        </ToolLine>
+      )
+
+    case "keyboard_press": {
+      const modifiers = Array.isArray(field(input, "modifiers"))
+        ? (field(input, "modifiers") as unknown[]).map(asText).join("+")
+        : ""
+      return (
+        <ToolLine>
+          Pressed {modifiers ? `${modifiers}+` : ""}
+          {asText(field(input, "key"))}
+        </ToolLine>
+      )
+    }
+
+    case "show_screen": {
+      const base64 = asText(field(output, "base64"))
+      if (!base64)
+        return (
+          <ToolNote>
+            {output === undefined ? "Taking a screenshot…" : "No screenshot."}
+          </ToolNote>
+        )
+      return (
+        // The screenshot is a base64 data URL, so next/image cannot optimize it.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          alt="The bot's screen"
+          className="max-w-full rounded-md border"
+          src={`data:${asText(field(output, "mediaType")) || "image/jpeg"};base64,${base64}`}
+        />
+      )
+    }
+
+    default:
+      return <OutputBlock>{JSON.stringify(input ?? null, null, 2)}</OutputBlock>
+  }
 }

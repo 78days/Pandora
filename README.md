@@ -63,20 +63,20 @@ The bot runtime is the next milestone. Instructions reach the model today, but s
 
 ## Tech stack
 
-| Layer        | Choice                                                               |
-| ------------ | -------------------------------------------------------------------- |
-| Framework    | Next.js 16 (App Router, React Server Components, Server Actions)     |
-| UI           | React 19, Tailwind CSS 4, shadcn/ui (`base-nova`), Base UI           |
-| Auth         | Clerk 7 (`@clerk/nextjs`)                                            |
-| Database     | Neon Postgres via `@neondatabase/serverless`                         |
-| ORM          | Drizzle ORM (`neon-http`) + `drizzle-kit`                            |
-| Validation   | Zod 4 + `drizzle-zod`                                                |
-| Forms        | React Hook Form + `@hookform/resolvers`                              |
-| Avatars      | DiceBear 10 (`@dicebear/core` + `@dicebear/styles`, `gaze`)          |
-| AI           | AI SDK 7 against Intern AI's OpenAI-compatible endpoint (Atria-Dawn) |
-| Chat runtime | Trigger.dev durable sessions (`chat.agent`)                          |
-| Icons        | Lucide                                                               |
-| Tooling      | TypeScript, ESLint, Prettier, Tailwind Prettier plugin               |
+| Layer        | Choice                                                                          |
+| ------------ | ------------------------------------------------------------------------------- |
+| Framework    | Next.js 16 (App Router, React Server Components, Server Actions)                |
+| UI           | React 19, Tailwind CSS 4, shadcn/ui (`base-nova`), Base UI                      |
+| Auth         | Clerk 7 (`@clerk/nextjs`)                                                       |
+| Database     | Neon Postgres via `@neondatabase/serverless`                                    |
+| ORM          | Drizzle ORM (`neon-http`) + `drizzle-kit`                                       |
+| Validation   | Zod 4 + `drizzle-zod`                                                           |
+| Forms        | React Hook Form + `@hookform/resolvers`                                         |
+| Avatars      | DiceBear 10 (`@dicebear/core` + `@dicebear/styles`, `gaze`)                     |
+| AI           | AI SDK 7 against Token Harbor's OpenAI-compatible gateway (DeepSeek V4.1 Flash) |
+| Chat runtime | Trigger.dev durable sessions (`chat.agent`)                                     |
+| Icons        | Lucide                                                                          |
+| Tooling      | TypeScript, ESLint, Prettier, Tailwind Prettier plugin                          |
 
 ## Architecture
 
@@ -88,7 +88,7 @@ flowchart TD
     Next -->|auth.protect| Clerk[Clerk]
     Next -->|Drizzle over neon-http| Neon[(Neon Postgres)]
     Next -->|session token| Trigger[Trigger.dev durable session]
-    Trigger -->|streamText| Model[Intern AI · Atria-Dawn]
+    Trigger -->|streamText| Model[Token Harbor · DeepSeek V4.1 Flash]
     Model -->|tokens| Trigger
     Trigger -->|realtime stream| Browser
 ```
@@ -103,7 +103,7 @@ sequenceDiagram
     participant U as Browser
     participant N as Next.js
     participant T as Trigger.dev
-    participant M as Atria-Dawn
+    participant M as DeepSeek V4.1 Flash
 
     U->>N: startChatSession(chatId)
     N->>N: requireChat, ownership check
@@ -186,7 +186,7 @@ erDiagram
 - A [Neon](https://neon.tech) Postgres project
 - A [Clerk](https://clerk.com) application (a development instance is sufficient)
 - A [Trigger.dev](https://trigger.dev) project
-- An Intern AI API key for the chat model
+- A Token Harbor API key for the chat model
 
 ### 1. Install dependencies
 
@@ -215,7 +215,7 @@ NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL="/"
 NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL="/"
 
 # Chat
-INTERN_AI_API_KEY="..."
+TOKENHARBOR_API_KEY="..."
 TRIGGER_SECRET_KEY="tr_dev_..."
 ```
 
@@ -228,7 +228,7 @@ TRIGGER_SECRET_KEY="tr_dev_..."
 | `DATABASE_URL_UNPOOLED`                           | Yes      | Direct connection used by `drizzle-kit push` and Studio |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`               | Yes      | Clerk client key                                        |
 | `CLERK_SECRET_KEY`                                | Yes      | Clerk server key                                        |
-| `INTERN_AI_API_KEY`                               | Yes      | Intern AI key used by the chat model                    |
+| `TOKENHARBOR_API_KEY`                             | Yes      | Token Harbor key used by the chat model                 |
 | `TRIGGER_SECRET_KEY`                              | Yes      | Trigger.dev server key for the chat runtime             |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_URL`                   | No       | Sign-in route, `/sign-in`                               |
 | `NEXT_PUBLIC_CLERK_SIGN_UP_URL`                   | No       | Sign-up route, `/sign-up`                               |
@@ -307,7 +307,7 @@ db/
   schema.ts                   # Tables, enum, insert schema, relations
 hooks/                        # Shared React hooks
 lib/
-  ai.ts                       # Intern AI provider and chat model
+  ai.ts                       # Token Harbor provider and chat model
 queries/
   bots.ts                     # Request-cached sidebar chats
   chats.ts                    # Request-cached chat lookup

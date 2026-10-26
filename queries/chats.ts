@@ -13,6 +13,7 @@ export type Chat = {
     avatar: string
     job: string
     instructions: string | null
+    sandboxId: string | null
   }
 }
 
@@ -35,6 +36,7 @@ export const getChat = cache(async (chatId: string): Promise<Chat | null> => {
             avatar: bots.avatar,
             job: bots.job,
             instructions: bots.instructions,
+            sandboxId: bots.sandboxId,
           },
         })
         .from(chats)
