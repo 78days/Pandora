@@ -7,6 +7,7 @@ import {
   type InferChatUIMessage,
 } from "@trigger.dev/sdk/chat/react"
 import type { ToolUIPart } from "ai"
+import { cn } from "cn"
 import { CheckIcon, CopyIcon, RefreshCwIcon } from "lucide-react"
 import {
   useCallback,
@@ -40,8 +41,14 @@ import {
   PromptInput,
   PromptInputBody,
   PromptInputFooter,
+  PromptInputSelect,
+  PromptInputSelectContent,
+  PromptInputSelectItem,
+  PromptInputSelectTrigger,
+  PromptInputSelectValue,
   PromptInputSubmit,
   PromptInputTextarea,
+  PromptInputTools,
 } from "@/components/ai-elements/prompt-input"
 import {
   Reasoning,
@@ -51,8 +58,10 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import { ChatAvatar } from "@/components/chat-avatar"
+import { GroupChatAvatar } from "@/components/group-chat-avatar"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
+import type { ChatMember } from "@/queries/chats"
 import type { pandoraChat } from "@/trigger/chat"
 
 type ChatMessage = InferChatUIMessage<typeof pandoraChat>
@@ -87,20 +96,26 @@ type Load =
 
 export function Chat({
   chatId,
+  kind,
   name,
-  avatar,
-  job,
-  instructions,
-  sandboxId,
+  members,
 }: {
   chatId: string
+  kind: "direct" | "group"
+  // Direct chats are named by their bot, groups by the dialog's name.
   name: string
-  avatar: string
-  job: string
-  instructions: string | null
-  sandboxId: string | null
+  members: ChatMember[]
 }) {
   const [load, setLoad] = useState<Load>({ chatId, status: "loading" })
+  // The session is initialized with the first member's identity; the
+  // transport's live clientData carries the composer's selection per turn.
+  const {
+    id: firstBotId,
+    name: firstBotName,
+    job: firstBotJob,
+    instructions: firstBotInstructions,
+    sandboxId: firstBotSandboxId,
+  } = members[0]
 
   useEffect(() => {
     let cancelled = false
@@ -120,7 +135,13 @@ export function Chat({
             // opens the stream and the server closes it fast if settled.
             const session = await startChatSession({
               chatId,
-              clientData: { name, job, instructions, sandboxId },
+              clientData: {
+                name: firstBotName,
+                job: firstBotJob,
+                instructions: firstBotInstructions,
+                sandboxId: firstBotSandboxId,
+                botId: firstBotId,
+              },
             })
             initialSessions = {
               [chatId]: {
@@ -158,7 +179,14 @@ export function Chat({
     return () => {
       cancelled = true
     }
-  }, [chatId, name, job, instructions, sandboxId])
+  }, [
+    chatId,
+    firstBotId,
+    firstBotName,
+    firstBotJob,
+    firstBotInstructions,
+    firstBotSandboxId,
+  ])
 
   // State from a previous chatId (navigating between chats) counts as loading.
   const current = load.chatId === chatId ? load : null
@@ -184,11 +212,9 @@ export function Chat({
   return (
     <ChatView
       chatId={chatId}
+      kind={kind}
       name={name}
-      avatar={avatar}
-      job={job}
-      instructions={instructions}
-      sandboxId={sandboxId}
+      members={members}
       initialMessages={current.initialMessages}
       initialSessions={current.initialSessions}
       resumeError={current.resumeError}
@@ -198,21 +224,17 @@ export function Chat({
 
 function ChatView({
   chatId,
+  kind,
   name,
-  avatar,
-  job,
-  instructions,
-  sandboxId,
+  members,
   initialMessages,
   initialSessions,
   resumeError,
 }: {
   chatId: string
+  kind: "direct" | "group"
   name: string
-  avatar: string
-  job: string
-  instructions: string | null
-  sandboxId: string | null
+  members: ChatMember[]
   initialMessages: ChatMessage[]
   initialSessions?: Record<string, ChatSessionPersistedState>
   resumeError?: string
@@ -220,14 +242,29 @@ function ChatView({
   // TEMPORARY debug strip data — counts of transport lifecycle events.
   const [streamEvents, setStreamEvents] = useState<Record<string, number>>({})
 
+  // Who the next turn goes to. Direct chats have a single member; groups pick
+  // in the composer. A stale id (navigated away and back) falls back to the
+  // first member.
+  const [selectedBotId, setSelectedBotId] = useState(members[0].id)
+  const selectedBot =
+    members.find((member) => member.id === selectedBotId) ?? members[0]
+
   const transport = useTriggerChatTransport<typeof pandoraChat>({
     task: "pandora-chat",
     accessToken: ({ chatId }) => mintChatAccessToken(chatId),
     startSession: ({ chatId, clientData }) =>
       startChatSession({ chatId, clientData }),
     // Untrusted input by design: it only shapes the bot's personality.
-    // Ownership is enforced server-side in the actions.
-    clientData: { name, job, instructions, sandboxId },
+    // Ownership is enforced server-side in the actions, and the sandbox a
+    // turn may touch is resolved from the DB by chatId + botId membership.
+    // Live-updates on a composer selection so the next send targets that bot.
+    clientData: {
+      name: selectedBot.name,
+      job: selectedBot.job,
+      instructions: selectedBot.instructions,
+      sandboxId: selectedBot.sandboxId,
+      botId: selectedBot.id,
+    },
     sessions: initialSessions,
     onEvent: (event) => {
       setStreamEvents((prev) => ({
@@ -472,78 +509,118 @@ function ChatView({
       <Conversation className="min-h-0 flex-1">
         {messages.length === 0 ? (
           <ConversationEmptyState
-            icon={<ChatAvatar seed={avatar} className="size-12" />}
+            icon={
+              kind === "group" ? (
+                <GroupChatAvatar
+                  avatars={members.map((member) => member.avatar)}
+                  className="size-12"
+                />
+              ) : (
+                <ChatAvatar seed={members[0].avatar} className="size-12" />
+              )
+            }
             title={name}
-            description={`Say hello to start the conversation with ${name}.`}
+            description={`Say hello to start the conversation with ${selectedBot.name}.`}
           />
         ) : (
           <ConversationContent>
             {messages.map((message, index) => {
               const isLastAssistant =
                 index === messages.length - 1 && message.role === "assistant"
+              // Group chats attribute each answer to its bot through the
+              // metadata stamped server-side; messages without it (older
+              // history) render as before.
+              const messageBot =
+                kind === "group" && message.role === "assistant"
+                  ? members.find(
+                      (member) => member.id === message.metadata?.botId
+                    )
+                  : undefined
               return (
-                <Message from={message.role} key={message.id}>
-                  <MessageContent>
-                    {message.parts.map((part, partIndex) => {
-                      switch (part.type) {
-                        case "text":
-                          return (
-                            <MessageResponse key={partIndex}>
-                              {part.text}
-                            </MessageResponse>
-                          )
-                        case "reasoning":
-                          return (
-                            <Reasoning
-                              defaultOpen={false}
-                              isStreaming={part.state === "streaming"}
-                              key={partIndex}
-                            >
-                              <ReasoningTrigger />
-                              <ReasoningContent>{part.text}</ReasoningContent>
-                            </Reasoning>
-                          )
-                      }
-
-                      if (part.type.startsWith("tool-")) {
-                        // The agent's own eyes: never part of the visible chat.
-                        if (part.type === "tool-view_screen") return null
-                        return (
-                          <ToolCall part={part as ToolUIPart} key={partIndex} />
-                        )
-                      }
-                    })}
-                  </MessageContent>
-                  {status !== "submitted" && (
-                    <MessageActions
-                      className={
-                        message.role === "user"
-                          ? "self-end opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-                          : isLastAssistant && status === "ready"
-                            ? "opacity-100 transition-opacity"
-                            : "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-                      }
-                    >
-                      <MessageAction
-                        onClick={() => void copyMessage(message)}
-                        tooltip={copiedId === message.id ? "Copied" : "Copy"}
-                      >
-                        {copiedId === message.id ? (
-                          <CheckIcon className="size-4" />
-                        ) : (
-                          <CopyIcon className="size-4" />
-                        )}
-                      </MessageAction>
-                      {isLastAssistant && status === "ready" && (
-                        <MessageAction
-                          onClick={regenerateLast}
-                          tooltip="Regenerate"
-                        >
-                          <RefreshCwIcon className="size-4" />
-                        </MessageAction>
-                      )}
-                    </MessageActions>
+                <Message
+                  className={
+                    messageBot ? "flex-row items-start gap-2" : undefined
+                  }
+                  from={message.role}
+                  key={message.id}
+                >
+                  {messageBot && (
+                    <ChatAvatar
+                      seed={messageBot.avatar}
+                      className="mt-0.5 size-6 shrink-0"
+                    />
                   )}
+                  <div
+                    className={cn(
+                      "flex min-w-0 flex-col gap-2",
+                      messageBot && "flex-1"
+                    )}
+                  >
+                    <MessageContent>
+                      {message.parts.map((part, partIndex) => {
+                        switch (part.type) {
+                          case "text":
+                            return (
+                              <MessageResponse key={partIndex}>
+                                {part.text}
+                              </MessageResponse>
+                            )
+                          case "reasoning":
+                            return (
+                              <Reasoning
+                                defaultOpen={false}
+                                isStreaming={part.state === "streaming"}
+                                key={partIndex}
+                              >
+                                <ReasoningTrigger />
+                                <ReasoningContent>{part.text}</ReasoningContent>
+                              </Reasoning>
+                            )
+                        }
+
+                        if (part.type.startsWith("tool-")) {
+                          // The agent's own eyes: never part of the visible chat.
+                          if (part.type === "tool-view_screen") return null
+                          return (
+                            <ToolCall
+                              part={part as ToolUIPart}
+                              key={partIndex}
+                            />
+                          )
+                        }
+                      })}
+                    </MessageContent>
+                    {status !== "submitted" && (
+                      <MessageActions
+                        className={
+                          message.role === "user"
+                            ? "self-end opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+                            : isLastAssistant && status === "ready"
+                              ? "opacity-100 transition-opacity"
+                              : "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+                        }
+                      >
+                        <MessageAction
+                          onClick={() => void copyMessage(message)}
+                          tooltip={copiedId === message.id ? "Copied" : "Copy"}
+                        >
+                          {copiedId === message.id ? (
+                            <CheckIcon className="size-4" />
+                          ) : (
+                            <CopyIcon className="size-4" />
+                          )}
+                        </MessageAction>
+                        {isLastAssistant && status === "ready" && (
+                          <MessageAction
+                            onClick={regenerateLast}
+                            tooltip="Regenerate"
+                          >
+                            <RefreshCwIcon className="size-4" />
+                          </MessageAction>
+                        )}
+                      </MessageActions>
+                    )}
+                  </div>
                 </Message>
               )
             })}
@@ -580,26 +657,61 @@ function ChatView({
             <PromptInputTextarea
               autoFocus
               onKeyDown={handleTextareaKeyDown}
-              placeholder={`Message ${name}...`}
+              placeholder={`Message ${selectedBot.name}...`}
               ref={textareaRef}
             />
           </PromptInputBody>
           <PromptInputFooter>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <Kbd>↵</Kbd> send
-              </span>
-              <span className="flex items-center gap-1">
-                <Kbd>⇧</Kbd>
-                <Kbd>↵</Kbd> newline
-              </span>
-              <span className="flex items-center gap-1">
-                <Kbd>↑</Kbd> history
-              </span>
-              <span className="flex items-center gap-1">
-                <Kbd>esc</Kbd> stop
-              </span>
-            </div>
+            {kind === "group" ? (
+              <PromptInputTools>
+                <PromptInputSelect
+                  value={selectedBot.id}
+                  onValueChange={(value) => setSelectedBotId(value as string)}
+                >
+                  <PromptInputSelectTrigger aria-label="Bot to talk to">
+                    <PromptInputSelectValue>
+                      {(value: string | null) => {
+                        const bot =
+                          members.find((member) => member.id === value) ??
+                          selectedBot
+                        return (
+                          <span className="flex items-center gap-1.5">
+                            <ChatAvatar seed={bot.avatar} className="size-5" />
+                            {bot.name}
+                          </span>
+                        )
+                      }}
+                    </PromptInputSelectValue>
+                  </PromptInputSelectTrigger>
+                  <PromptInputSelectContent>
+                    {members.map((member) => (
+                      <PromptInputSelectItem key={member.id} value={member.id}>
+                        <span className="flex items-center gap-2">
+                          <ChatAvatar seed={member.avatar} className="size-5" />
+                          {member.name}
+                        </span>
+                      </PromptInputSelectItem>
+                    ))}
+                  </PromptInputSelectContent>
+                </PromptInputSelect>
+              </PromptInputTools>
+            ) : (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1">
+                  <Kbd>↵</Kbd> send
+                </span>
+                <span className="flex items-center gap-1">
+                  <Kbd>⇧</Kbd>
+                  <Kbd>↵</Kbd> newline
+                </span>
+                <span className="flex items-center gap-1">
+                  <Kbd>↑</Kbd> history
+                </span>
+                <span className="flex items-center gap-1">
+                  <Kbd>esc</Kbd> stop
+                </span>
+              </div>
+            )}
             <PromptInputSubmit status={status} onStop={stop} />
           </PromptInputFooter>
         </PromptInput>
@@ -633,6 +745,7 @@ const toolTitles: Record<string, string> = {
   keyboard_type: "Typed text",
   keyboard_press: "Pressed a key",
   show_screen: "Showed the screen",
+  handoff: "Handed off",
 }
 
 function field(value: unknown, key: string): unknown {
@@ -838,6 +951,17 @@ function ToolDetails({
           className="max-w-full rounded-md border"
           src={`data:${asText(field(output, "mediaType")) || "image/jpeg"};base64,${base64}`}
         />
+      )
+    }
+
+    case "handoff": {
+      const name = asText(field(output, "handedTo"))
+      const reason = asText(field(output, "reason"))
+      if (!name) return <ToolNote>Handing off to another bot…</ToolNote>
+      return (
+        <ToolNote>
+          Handed off to {name}.{reason ? ` ${reason}` : ""}
+        </ToolNote>
       )
     }
 

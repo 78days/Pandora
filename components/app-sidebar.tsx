@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react"
 
 import { BotDialog } from "@/components/bot-dialog"
 import { CloseSearchDialogProvider } from "@/components/chat-command-item"
+import { GroupChatDialog } from "@/components/group-chat-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -40,6 +41,7 @@ export function AppSidebar({
   searchChats?: React.ReactNode
 }) {
   const [botDialogOpen, setBotDialogOpen] = useState(false)
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const closeSearchDialog = useCallback(() => setSearchOpen(false), [])
 
@@ -73,7 +75,7 @@ export function AppSidebar({
                   <PlusIcon />
                   Create a new bot
                 </DropdownMenuItem>
-                <DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setGroupDialogOpen(true)}>
                   <UsersIcon />
                   Create a group chat
                 </DropdownMenuItem>
@@ -121,6 +123,10 @@ export function AppSidebar({
         <SidebarRail />
       </Sidebar>
       <BotDialog open={botDialogOpen} onOpenChange={setBotDialogOpen} />
+      <GroupChatDialog
+        open={groupDialogOpen}
+        onOpenChange={setGroupDialogOpen}
+      />
       <CommandDialog open={searchOpen} onOpenChange={setSearchOpen}>
         <Command>
           <CommandInput placeholder="Search chats..." />

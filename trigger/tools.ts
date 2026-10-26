@@ -1,6 +1,6 @@
 import type { Sandbox } from "@daytona/sdk"
 import { generateText, tool } from "ai"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { z } from "zod"
 
 import { db } from "../db"
@@ -19,13 +19,23 @@ const clamp = (text: string) =>
 
 // The browser supplies `clientData`, but only the chat row decides which
 // sandbox a turn may touch — a forged sandboxId would otherwise reach another
-// user's computer.
-async function sandboxForChat(chatId: string): Promise<Sandbox> {
+// user's computer. The respondent's botId comes from a getter rather than a
+// fixed value: a handoff rewrites it mid-turn, so tool calls after the
+// handoff operate the new bot's sandbox. The lookup still runs through the
+// DB, so the bot must be a member of the chat for it to land on a sandbox.
+async function sandboxForChat(
+  chatId: string,
+  botId?: string
+): Promise<Sandbox> {
   const [row] = await db
     .select({ sandboxId: bots.sandboxId })
     .from(bots)
     .innerJoin(chatMembers, eq(chatMembers.botId, bots.id))
-    .where(eq(chatMembers.chatId, chatId))
+    .where(
+      botId
+        ? and(eq(chatMembers.chatId, chatId), eq(chatMembers.botId, botId))
+        : eq(chatMembers.chatId, chatId)
+    )
     .limit(1)
 
   if (!row?.sandboxId) throw new Error("This bot has no sandbox.")
@@ -118,8 +128,11 @@ const textOutput = ({ output }: { output: { description: string } }) => ({
 
 export type PandoraTools = ReturnType<typeof createTools>
 
-export function createTools(chatId: string) {
-  const sandbox = () => sandboxForChat(chatId)
+export function createTools(
+  chatId: string,
+  getBotId: () => string | undefined
+) {
+  const sandbox = () => sandboxForChat(chatId, getBotId())
 
   return {
     bash: tool({

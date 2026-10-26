@@ -7,24 +7,26 @@ import { bots, chatMembers, chats } from "@/db/schema"
 
 export type SidebarChat = {
   id: string
-  botName: string
-  botAvatar: string
+  // Group chats carry the dialog's name; direct chats are named by their bot.
+  name: string
+  // Member avatar seeds in join order; GroupChatAvatar caps the display.
+  avatars: string[]
   lastMessagePreview: string | null
   lastMessageAt: Date
 }
 
-// The user's chats, newest first, each resolved to its first bot member
-// (group chats fall back to the earliest member until they get real avatars).
-// Memoized per request: the sidebar list and the search dialog share one query.
+// The user's chats, newest first, each with every member's avatar. Memoized
+// per request: the sidebar list and the search dialog share one query.
 export const getSidebarChats = cache(async (): Promise<SidebarChat[]> => {
   const { userId } = await auth()
   if (!userId) return []
 
-  // Ordering keeps each chat's rows contiguous and its earliest member first,
-  // so the first row seen per chat id carries its bot.
+  // Ordering keeps each chat's rows contiguous and its members in join order.
   const rows = await db
     .select({
       id: chats.id,
+      kind: chats.kind,
+      chatName: chats.name,
       lastMessagePreview: chats.lastMessagePreview,
       lastMessageAt: chats.lastMessageAt,
       botName: bots.name,
@@ -42,14 +44,20 @@ export const getSidebarChats = cache(async (): Promise<SidebarChat[]> => {
 
   const sidebarChats = new Map<string, SidebarChat>()
   for (const row of rows) {
-    if (!sidebarChats.has(row.id)) {
+    const existing = sidebarChats.get(row.id)
+    if (!existing) {
       sidebarChats.set(row.id, {
         id: row.id,
-        botName: row.botName ?? "",
-        botAvatar: row.botAvatar ?? "",
+        name:
+          row.kind === "group"
+            ? (row.chatName ?? "Group chat")
+            : (row.botName ?? ""),
+        avatars: row.botAvatar ? [row.botAvatar] : [],
         lastMessagePreview: row.lastMessagePreview,
         lastMessageAt: row.lastMessageAt,
       })
+    } else if (row.kind === "group" && row.botAvatar) {
+      existing.avatars.push(row.botAvatar)
     }
   }
   return [...sidebarChats.values()]

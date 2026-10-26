@@ -6,6 +6,7 @@ import { useState } from "react"
 import { BotDialog, type EditableBot } from "@/components/bot-dialog"
 import { ChatAvatar } from "@/components/chat-avatar"
 import { useDesktopPanel } from "@/components/chat-panels"
+import { GroupChatAvatar } from "@/components/group-chat-avatar"
 import { Button } from "@/components/ui/button"
 
 function ChatHeader({ bot }: { bot: EditableBot }) {
@@ -40,4 +41,22 @@ function ChatHeader({ bot }: { bot: EditableBot }) {
   )
 }
 
-export { ChatHeader }
+// Groups have no edit target and no desktop panel of their own.
+function GroupChatHeader({
+  name,
+  avatars,
+}: {
+  name: string
+  avatars: string[]
+}) {
+  return (
+    <header className="flex h-10 items-center gap-2 border-b border-white/15 bg-black px-4 text-white">
+      <div className="flex items-center gap-2 px-2 text-sm font-semibold">
+        <GroupChatAvatar avatars={avatars} className="size-5" />
+        {name}
+      </div>
+    </header>
+  )
+}
+
+export { ChatHeader, GroupChatHeader }

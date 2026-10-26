@@ -2,12 +2,24 @@
 
 import { auth } from "@clerk/nextjs/server"
 import { DaytonaNotFoundError } from "@daytona/sdk"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 import { nanoid } from "nanoid"
 
 import { db } from "@/db"
 import { bots, botsInsertSchema, chatMembers, chats } from "@/db/schema"
 import { getDaytona } from "@/lib/daytona"
+
+// Bots for the group-chat dialog's checkbox list, fetched on open.
+export async function listBots() {
+  const { userId } = await auth()
+  if (!userId) throw new Error("Unauthorized")
+
+  return db
+    .select({ id: bots.id, name: bots.name, avatar: bots.avatar })
+    .from(bots)
+    .where(eq(bots.userId, userId))
+    .orderBy(asc(bots.name))
+}
 
 export async function createBot(input: unknown) {
   const { userId } = await auth()

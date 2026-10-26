@@ -9,7 +9,7 @@ import {
 } from "drizzle-orm/pg-core"
 import { createInsertSchema } from "drizzle-zod"
 import { nanoid } from "nanoid"
-import type { z } from "zod"
+import { z } from "zod"
 
 export const bots = pgTable(
   "bots",
@@ -85,6 +85,16 @@ export const botsInsertSchema = createInsertSchema(bots, {
 })
 
 export type BotsInsert = z.infer<typeof botsInsertSchema>
+
+// Group chat creation spans two tables (a chat row plus its members), so the
+// chats-shaped insert schema doesn't fit; the shape is the dialog's payload:
+// a name and which of the user's bots join. `kind` is server-managed.
+export const groupChatsInsertSchema = z.object({
+  name: z.string().trim().min(1, "Name is required."),
+  botIds: z.array(z.string().min(1)).min(1, "Pick at least one bot."),
+})
+
+export type GroupChatsInsert = z.infer<typeof groupChatsInsertSchema>
 
 export const botsRelations = relations(bots, ({ many }) => ({
   memberships: many(chatMembers),

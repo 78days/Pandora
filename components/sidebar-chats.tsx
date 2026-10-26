@@ -31,8 +31,8 @@ async function SidebarChats() {
             <ChatSidebarItem
               key={chat.id}
               chatId={chat.id}
-              botName={chat.botName}
-              botAvatar={chat.botAvatar}
+              name={chat.name}
+              avatars={chat.avatars}
               lastMessagePreview={chat.lastMessagePreview}
               timeLabel={relativeTime(chat.lastMessageAt)}
             />
@@ -56,8 +56,8 @@ async function CommandChats() {
           <ChatCommandItem
             key={chat.id}
             chatId={chat.id}
-            botName={chat.botName}
-            botAvatar={chat.botAvatar}
+            name={chat.name}
+            avatars={chat.avatars}
           />
         ))}
       </CommandGroup>

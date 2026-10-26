@@ -3,7 +3,7 @@ import { notFound } from "next/navigation"
 
 import { Chat } from "@/components/chat"
 import { ChatDesktop } from "@/components/chat-desktop"
-import { ChatHeader } from "@/components/chat-header"
+import { ChatHeader, GroupChatHeader } from "@/components/chat-header"
 import { ChatPanels } from "@/components/chat-panels"
 import { getChat } from "@/queries/chats"
 
@@ -18,15 +18,31 @@ export default async function ChatPage({
   if (!chat) notFound()
 
   return (
-    <ChatPanels desktop={<ChatDesktop chatId={chat.id} name={chat.bot.name} />}>
-      <ChatHeader bot={chat.bot} />
+    <ChatPanels
+      // Group chats have no desktop panel; only a direct chat's bot owns one.
+      desktop={
+        chat.kind === "direct" ? (
+          <ChatDesktop chatId={chat.id} name={chat.members[0].name} />
+        ) : null
+      }
+    >
+      {chat.kind === "group" ? (
+        <GroupChatHeader
+          name={chat.name ?? "Group chat"}
+          avatars={chat.members.map((member) => member.avatar)}
+        />
+      ) : (
+        <ChatHeader bot={chat.members[0]} />
+      )}
       <Chat
         chatId={chat.id}
-        name={chat.bot.name}
-        avatar={chat.bot.avatar}
-        job={chat.bot.job}
-        instructions={chat.bot.instructions}
-        sandboxId={chat.bot.sandboxId}
+        kind={chat.kind}
+        name={
+          chat.kind === "group"
+            ? (chat.name ?? "Group chat")
+            : chat.members[0].name
+        }
+        members={chat.members}
       />
     </ChatPanels>
   )
