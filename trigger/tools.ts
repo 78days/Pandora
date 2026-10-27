@@ -1,14 +1,11 @@
 import type { Sandbox } from "@daytona/sdk"
 import { generateText, tool } from "ai"
-import { and, eq } from "drizzle-orm"
 import { z } from "zod"
 
-import { db } from "../db"
-import { bots, chatMembers } from "../db/schema"
 import { chatModel } from "../lib/ai"
 import { getDaytona } from "../lib/daytona"
 import { MEMORY_FILE_PATH } from "../lib/memory"
-import { assertSandboxQuota, chatUserId } from "./usage"
+import { assertSandboxQuota } from "./usage"
 
 // Text results share one cap: a runaway `cat` of a huge file would otherwise
 // fill the model's context and the streamed tool-output record.
@@ -19,144 +16,152 @@ const clamp = (text: string) =>
     ? `${text.slice(0, MAX_OUTPUT_CHARS)}\n…[truncated]`
     : text
 
-// The browser supplies `clientData`, but only the chat row decides which
-// sandbox a turn may touch — a forged sandboxId would otherwise reach another
-// user's computer. The respondent's botId comes from a getter rather than a
-// fixed value: a handoff rewrites it mid-turn, so tool calls after the
-// handoff operate the new bot's sandbox. The lookup still runs through the
-// DB, so the bot must be a member of the chat for it to land on a sandbox.
+// The sandbox a turn may touch is resolved by the agent before the tools are
+// built — the turn context already proved the bot belongs to the chat, so no
+// per-call lookup can widen that. The responder's id comes from a getter
+// rather than a fixed value: a handoff rewrites it mid-turn, so tool calls
+// after the handoff operate the new bot's sandbox. Sandboxes are woken on
+// first use and kept per id, since a handoff changes whose sandbox this is.
 // Each call is also the meter's choke point: a plan with its sandbox
-// allowance spent fails here, which the model relays instead of the chat
-// dying.
-async function sandboxForChat(
-  chatId: string,
-  botId?: string
-): Promise<Sandbox> {
-  const userId = await chatUserId(chatId)
-  if (userId) await assertSandboxQuota(userId)
-
-  const [row] = await db
-    .select({ sandboxId: bots.sandboxId })
-    .from(bots)
-    .innerJoin(chatMembers, eq(chatMembers.botId, bots.id))
-    .where(
-      botId
-        ? and(eq(chatMembers.chatId, chatId), eq(chatMembers.botId, botId))
-        : eq(chatMembers.chatId, chatId)
-    )
-    .limit(1)
-
-  if (!row?.sandboxId) throw new Error("This bot has no sandbox.")
-
-  const sandbox = await getDaytona().get(row.sandboxId)
-  // Sandboxes auto-stop when idle; the next tool call wakes this one.
-  if (sandbox.state !== "started") await sandbox.start()
-  return sandbox
-}
-
-async function computer(sandbox: Sandbox) {
-  const { status } = await sandbox.computerUse.getStatus()
-  if (status !== "active") await sandbox.computerUse.start()
-  return sandbox.computerUse
-}
-
-// 1024x768 JPEG at quality 55 is ~40 KB, comfortably under Trigger's ~1 MiB
-// tool-output record limit while staying readable for vision models.
-async function captureScreen(chatId: string) {
-  const sandbox = await sandboxForChat(chatId)
-  const use = await computer(sandbox)
-  const [shot, display] = await Promise.all([
-    use.screenshot.takeCompressed({ format: "jpeg", quality: 55 }),
-    use.display.getInfo(),
-  ])
-
-  if (!shot.screenshot) throw new Error("Screenshot failed.")
-
-  const primary =
-    display.displays?.find((entry) => entry.isActive) ?? display.displays?.[0]
-
-  return {
-    base64: shot.screenshot,
-    mediaType: "image/jpeg",
-    width: primary?.width ?? 0,
-    height: primary?.height ?? 0,
-  }
-}
-
-// OpenAI-compatible tool results can't carry images: the provider drops them
-// and the model answers blind. So a vision pass describes the screenshot and
-// that text goes back to the agent; show_screen still streams the raw image
-// to the chat UI.
-async function describeScreen({
-  base64,
-  width,
-  height,
+// allowance spent fails here (at most once a minute), which the model relays
+// instead of the chat dying.
+export function createTools({
+  getSandboxId,
+  getUserId,
 }: {
-  base64: string
-  width: number
-  height: number
+  getSandboxId: () => string | undefined
+  getUserId: () => string
 }) {
-  const result = await generateText({
-    model: chatModel,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: [
-              `You are the eyes of an AI agent controlling this ${width}x${height} Linux desktop.`,
-              "Describe only what is visible: the active app or window, readable text, buttons and fields with approximate pixel coordinates, any dialog or error, and where the mouse cursor is.",
-              "If the screen is blank or shows only the desktop, say so. Do not invent content. Keep it under 120 words.",
-            ].join(" "),
-          },
-          {
-            type: "file",
-            mediaType: "image/jpeg",
-            data: { type: "data", data: base64 },
-          },
-        ],
-      },
-    ],
-    // Agents-A1 spends reasoning tokens first; a tight cap can end the step
-    // with no visible text at all.
-    maxOutputTokens: 2048,
+  const sandboxes = new Map<string, Promise<Sandbox>>()
+
+  async function sandbox(): Promise<Sandbox> {
+    const sandboxId = getSandboxId()
+    if (!sandboxId) throw new Error("This bot has no sandbox.")
+
+    const userId = getUserId()
+    await assertSandboxQuota(userId)
+
+    let sandbox = sandboxes.get(sandboxId)
+    if (!sandbox) {
+      // Sandboxes auto-stop when idle; the next tool call wakes this one.
+      sandbox = getDaytona()
+        .get(sandboxId)
+        .then(async (instance) => {
+          if (instance.state !== "started") await instance.start()
+          return instance
+        })
+        .catch((error) => {
+          // Let the next tool call try again
+          sandboxes.delete(sandboxId)
+          throw error
+        })
+      sandboxes.set(sandboxId, sandbox)
+    }
+    return sandbox
+  }
+
+  async function computer(sandbox: Sandbox) {
+    const { status } = await sandbox.computerUse.getStatus()
+    if (status !== "active") await sandbox.computerUse.start()
+    return sandbox.computerUse
+  }
+
+  // 1024x768 JPEG at quality 55 is ~40 KB, comfortably under Trigger's ~1 MiB
+  // tool-output record limit while staying readable for vision models.
+  async function captureScreen() {
+    const instance = await sandbox()
+    const use = await computer(instance)
+    const [shot, display] = await Promise.all([
+      use.screenshot.takeCompressed({ format: "jpeg", quality: 55 }),
+      use.display.getInfo(),
+    ])
+
+    if (!shot.screenshot) throw new Error("Screenshot failed.")
+
+    const primary =
+      display.displays?.find((entry) => entry.isActive) ?? display.displays?.[0]
+
+    return {
+      base64: shot.screenshot,
+      mediaType: "image/jpeg",
+      width: primary?.width ?? 0,
+      height: primary?.height ?? 0,
+    }
+  }
+
+  // OpenAI-compatible tool results can't carry images: the provider drops them
+  // and the model answers blind. So a vision pass describes the screenshot and
+  // that text goes back to the agent; show_screen still streams the raw image
+  // to the chat UI.
+  async function describeScreen({
+    base64,
+    width,
+    height,
+  }: {
+    base64: string
+    width: number
+    height: number
+  }) {
+    const result = await generateText({
+      model: chatModel,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                `You are the eyes of an AI agent controlling this ${width}x${height} Linux desktop.`,
+                "Describe only what is visible: the active app or window, readable text, buttons and fields with approximate pixel coordinates, any dialog or error, and where the mouse cursor is.",
+                "If the screen is blank or shows only the desktop, say so. Do not invent content. Keep it under 120 words.",
+              ].join(" "),
+            },
+            {
+              type: "file",
+              mediaType: "image/jpeg",
+              data: { type: "data", data: base64 },
+            },
+          ],
+        },
+      ],
+      // Agents-A1 spends reasoning tokens first; a tight cap can end the step
+      // with no visible text at all.
+      maxOutputTokens: 2048,
+    })
+
+    return (
+      result.text.trim() ||
+      "Screenshot captured, but describing it failed. Call view_screen again."
+    )
+  }
+
+  const textOutput = ({ output }: { output: { description: string } }) => ({
+    type: "text" as const,
+    value: output.description,
   })
-
-  return (
-    result.text.trim() ||
-    "Screenshot captured, but describing it failed. Call view_screen again."
-  )
-}
-
-const textOutput = ({ output }: { output: { description: string } }) => ({
-  type: "text" as const,
-  value: output.description,
-})
-
-export type PandoraTools = ReturnType<typeof createTools>
-
-export function createTools(
-  chatId: string,
-  getBotId: () => string | undefined
-) {
-  const sandbox = () => sandboxForChat(chatId, getBotId())
 
   return {
     bash: tool({
       description:
-        "Run a shell command in your Linux sandbox and return its exit code and output.",
+        "Run a shell command in your Linux sandbox and return its exit code and output. Each call is a fresh shell.",
       inputSchema: z.object({
         command: z.string().describe("The shell command to run."),
         cwd: z
           .string()
           .optional()
           .describe("Working directory. Defaults to the home directory."),
+        timeout: z
+          .number()
+          .int()
+          .min(1)
+          .max(600)
+          .optional()
+          .describe("Seconds to wait before giving up. Defaults to 60."),
       }),
-      execute: async ({ command, cwd }) => {
+      execute: async ({ command, cwd, timeout = 60 }) => {
         const result = await (
           await sandbox()
-        ).process.executeCommand(command, cwd, undefined, 120)
+        ).process.executeCommand(command, cwd, undefined, timeout)
         return {
           exitCode: result.exitCode ?? 0,
           output: clamp(result.result),
@@ -273,10 +278,14 @@ export function createTools(
     }),
 
     mouse_click: tool({
-      description: "Click the mouse at screen coordinates.",
+      description:
+        "Click the mouse at a point on your sandbox's desktop. Look at the screen first to find the coordinates.",
       inputSchema: z.object({
-        x: z.number().int().describe("X coordinate in screen pixels."),
-        y: z.number().int().describe("Y coordinate in screen pixels."),
+        x: z
+          .number()
+          .int()
+          .describe("Pixels from the left edge of the screen."),
+        y: z.number().int().describe("Pixels from the top edge of the screen."),
         button: z.enum(["left", "right", "middle"]).optional(),
         double: z.boolean().optional().describe("Double-click when true."),
       }),
@@ -288,10 +297,14 @@ export function createTools(
     }),
 
     mouse_move: tool({
-      description: "Move the mouse to screen coordinates.",
+      description:
+        "Move the mouse cursor to a point on your sandbox's desktop without clicking.",
       inputSchema: z.object({
-        x: z.number().int().describe("X coordinate in screen pixels."),
-        y: z.number().int().describe("Y coordinate in screen pixels."),
+        x: z
+          .number()
+          .int()
+          .describe("Pixels from the left edge of the screen."),
+        y: z.number().int().describe("Pixels from the top edge of the screen."),
       }),
       execute: async ({ x, y }) => {
         const use = await computer(await sandbox())
@@ -300,11 +313,43 @@ export function createTools(
       },
     }),
 
-    mouse_scroll: tool({
-      description: "Scroll the mouse wheel at screen coordinates.",
+    mouse_drag: tool({
+      description:
+        "Press the left mouse button at one point on your sandbox's desktop, drag to another and release.",
       inputSchema: z.object({
-        x: z.number().int().describe("X coordinate in screen pixels."),
-        y: z.number().int().describe("Y coordinate in screen pixels."),
+        startX: z
+          .number()
+          .int()
+          .describe("Pixels from the left edge of the screen."),
+        startY: z
+          .number()
+          .int()
+          .describe("Pixels from the top edge of the screen."),
+        endX: z
+          .number()
+          .int()
+          .describe("Pixels from the left edge of the screen."),
+        endY: z
+          .number()
+          .int()
+          .describe("Pixels from the top edge of the screen."),
+      }),
+      execute: async ({ startX, startY, endX, endY }) => {
+        const use = await computer(await sandbox())
+        await use.mouse.drag(startX, startY, endX, endY)
+        return { x: endX, y: endY }
+      },
+    }),
+
+    mouse_scroll: tool({
+      description:
+        "Scroll the mouse wheel at a point on your sandbox's desktop.",
+      inputSchema: z.object({
+        x: z
+          .number()
+          .int()
+          .describe("Pixels from the left edge of the screen."),
+        y: z.number().int().describe("Pixels from the top edge of the screen."),
         direction: z.enum(["up", "down", "left", "right"]),
         amount: z
           .number()
@@ -322,7 +367,8 @@ export function createTools(
     }),
 
     keyboard_type: tool({
-      description: "Type text with the keyboard into the focused window.",
+      description:
+        "Type text into whatever has keyboard focus on your sandbox's desktop. Newlines are typed as Enter.",
       inputSchema: z.object({
         text: z.string().describe("Text to type."),
       }),
@@ -358,7 +404,7 @@ export function createTools(
         "Look at the current screen. Use before clicking or typing into a GUI, and after acting to check the result. Not shown to the user.",
       inputSchema: z.object({}),
       execute: async () => {
-        const shot = await captureScreen(chatId)
+        const shot = await captureScreen()
         return {
           width: shot.width,
           height: shot.height,
@@ -374,10 +420,12 @@ export function createTools(
         "Show the user what is currently on screen. Use when they ask to see the screen or what you are doing.",
       inputSchema: z.object({}),
       execute: async () => {
-        const shot = await captureScreen(chatId)
+        const shot = await captureScreen()
         return { ...shot, description: await describeScreen(shot) }
       },
       toModelOutput: textOutput,
     }),
   }
 }
+
+export type PandoraTools = ReturnType<typeof createTools>

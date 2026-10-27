@@ -1,6 +1,6 @@
 import { chat, type InferChatUIMessageFromTools } from "@trigger.dev/sdk/ai"
 import { isStepCount, tool } from "ai"
-import { and, asc, eq } from "drizzle-orm"
+import { asc, eq } from "drizzle-orm"
 import { z } from "zod"
 
 import { db } from "../db"
@@ -10,28 +10,16 @@ import { Sentry } from "./sentry"
 import { createTools, type PandoraTools } from "./tools"
 import { assertTokenQuota, chatUserId, recordTurnUsage } from "./usage"
 
-const clientDataSchema = z.object({
-  name: z.string().min(1),
-  job: z.string().min(1),
-  instructions: z.string().nullish(),
-  sandboxId: z.string().nullish(),
-  // Group chats: which member this turn goes to, chosen in the composer and
-  // threaded through the transport's per-turn metadata. Only the personality
-  // is trusted from the browser; the sandbox is still resolved from the DB.
-  botId: z.string().nullish(),
-})
+// Sent with each message. The bot a group chat's message is addressed to;
+// everything else about the bot is read from the database, so a forged
+// payload can only pick among the chat's own members.
+const clientDataSchema = z
+  .object({
+    botId: z.string().nullish(),
+  })
+  .optional()
 
-type BotClientData = z.infer<typeof clientDataSchema>
-
-// Run-scoped state: the bot that currently holds the mic. Each turn starts
-// with the composer's selection; a handoff rewrites it mid-turn, and the
-// sandbox tools, the per-step persona swap, and the message metadata all read
-// it so they stay in agreement about who is speaking.
-const currentBot = chat.local<{ botId?: string }>({ id: "pandoraRespondent" })
-
-// The group's member roster, loaded from the DB per turn — the system prompt
-// and handoff validation never trust a browser-supplied member list.
-type GroupTurnMember = {
+type TurnBot = {
   id: string
   name: string
   job: string
@@ -39,16 +27,20 @@ type GroupTurnMember = {
   sandboxId: string | null
 }
 
-type GroupTurn = {
-  name: string | null
-  members: GroupTurnMember[]
-}
-
-async function groupForTurn(chatId: string): Promise<GroupTurn | null> {
+// A chat's bots and the one answering this turn, straight from the database.
+// No session here: the chat's owner was checked when the session started.
+// botId comes from the browser, so it only ever picks among the chat's own
+// members; without one (or with a stale one) the first member answers.
+async function getTurnContext(chatId: string, botId?: string | null) {
   const rows = await db
     .select({
-      name: chats.name,
-      member: {
+      chat: {
+        id: chats.id,
+        userId: chats.userId,
+        kind: chats.kind,
+        name: chats.name,
+      },
+      bot: {
         id: bots.id,
         name: bots.name,
         job: bots.job,
@@ -59,39 +51,58 @@ async function groupForTurn(chatId: string): Promise<GroupTurn | null> {
     .from(chats)
     .innerJoin(chatMembers, eq(chatMembers.chatId, chats.id))
     .innerJoin(bots, eq(bots.id, chatMembers.botId))
-    .where(and(eq(chats.id, chatId), eq(chats.kind, "group")))
+    .where(eq(chats.id, chatId))
     .orderBy(asc(chatMembers.joinedAt))
 
   const [first] = rows
-  if (!first) return null
-  return { name: first.name, members: rows.map((row) => row.member) }
+  const members = rows.map((row) => row.bot)
+  const bot = members.find((member) => member.id === botId) ?? members[0]
+  if (!first || !bot) throw new Error("Bot is not in this chat")
+
+  return {
+    chat: first.chat,
+    members,
+    bot: bot as TurnBot,
+  }
 }
 
-async function chatKind(chatId: string) {
-  const [row] = await db
-    .select({ kind: chats.kind })
-    .from(chats)
-    .where(eq(chats.id, chatId))
-  return row?.kind ?? null
+// What a bot is told on top of its own job when it answers in a group chat
+function groupBriefing(
+  bot: TurnBot,
+  group: { name: string | null; members: TurnBot[] }
+) {
+  const others = group.members.filter((member) => member.id !== bot.id)
+  return [
+    group.name
+      ? `This is the group chat "${group.name}".`
+      : "This is a group chat.",
+    others.length > 0
+      ? `The other bots here: ${others.map((member) => `${member.name} (${member.job}) — botId "${member.id}"`).join("; ")}.`
+      : "You are its only bot.",
+    "A human user chats with all of you and picks which bot answers each message; another bot can also hand the conversation to you mid-turn.",
+    others.length > 0
+      ? "If the user's message is clearly a better fit for another bot's job than yours, call the handoff tool with that bot's botId instead of answering yourself. Hand off only on a clear mismatch — anything within your own job is yours to handle. Never pass a request back to a bot that handed it to you."
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ")
 }
 
 // Base identity for every bot: name, job, purpose, and its sandbox
-// environment. The creator's instructions come last so they read as
-// additional, bot-specific direction on top of the shared frame. Group chats
-// add a briefing: who else is here, how turns are chosen, and when to hand
-// the conversation off.
-function systemPrompt(
-  clientData: BotClientData | undefined,
-  group: GroupTurn | null
-) {
-  if (!clientData) return undefined
-
+// environment. The creator's instructions come so they read as additional,
+// bot-specific direction on top of the shared frame. Group chats add a
+// briefing: who else is here, how turns are chosen, and when to hand the
+// conversation off. Read from the database every turn, so edits to a bot
+// apply to its next message.
+function systemPrompt(bot: TurnBot, group: GroupTurn | null) {
   return [
-    `You are ${clientData.name}, a bot in Pandora — a space where people create their own bots and chat with them.`,
-    `Your job: ${clientData.job}.`,
-    `Your purpose is to be the user's bot: converse naturally, stay in character as ${clientData.name}, and help with whatever they bring.`,
-    group ? groupBriefing(clientData, group) : undefined,
-    clientData.sandboxId
+    `You are ${bot.name}, a bot in Pandora — a space where people create their own bots and chat with them.`,
+    `Your job: ${bot.job}.`,
+    `Your purpose is to be the user's bot: converse naturally, stay in character as ${bot.name}, and help with whatever they bring.`,
+    bot.instructions
+      ? `Instructions from your creator:\n${bot.instructions}`
+      : undefined,
+    bot.sandboxId
       ? [
           "You have your own sandbox environment: a dedicated, isolated Linux computer that was created for you and is linked only to you.",
           "You can control it with tools: bash, read_file, write_file, list_files, and mouse/keyboard control of its desktop.",
@@ -104,39 +115,34 @@ function systemPrompt(
           "Memory is how things said to you in private stay with you: note them as you go and you can recall them later, even when asked in a group chat.",
         ].join(" ")
       : undefined,
-    clientData.instructions
-      ? `Instructions from your creator:\n${clientData.instructions}`
-      : undefined,
+    group ? groupBriefing(bot, group) : undefined,
   ]
     .filter(Boolean)
     .join("\n\n")
 }
 
-function groupBriefing(clientData: BotClientData, group: GroupTurn) {
-  const others = group.members.filter(
-    (member) => member.id !== clientData.botId
-  )
-  return [
-    group.name
-      ? `This is the group chat "${group.name}".`
-      : "This is a group chat.",
-    others.length > 0
-      ? `The other bots here: ${others.map((member) => `${member.name} (${member.job}) — botId "${member.id}"`).join("; ")}.`
-      : "You are its only bot.",
-    "A human user chats with all of you and picks which bot answers each message; another bot can also hand the conversation to you mid-turn.",
-    others.length > 0
-      ? "If the user's message is clearly a better fit for another bot's job than yours, call the handoff tool with that bot's botId instead of answering yourself. Hand off only on a clear mismatch — anything within your own job is yours to handle."
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ")
+type GroupTurn = {
+  name: string | null
+  members: TurnBot[]
 }
 
-// Resolves only for group chats. The target is validated against the chat's
-// DB membership, so a hallucinated or foreign botId errors the call instead
-// of switching personas. A successful handoff rewrites the mic-holder; the
-// run's prepareStep picks it up before the next step.
-function createHandoffTool(chatId: string) {
+// Run-scoped state: the bot that currently holds the mic. Each turn starts
+// with the composer's selection; a handoff rewrites it mid-turn, and the
+// per-step persona swap and the message metadata read it so they stay in
+// agreement about who is speaking.
+const currentBot = chat.local<{ botId?: string }>({ id: "pandoraRespondent" })
+
+// The handoff tool for group chats. The target is validated against the
+// turn's DB-loaded member list, so a hallucinated or foreign botId errors
+// the call instead of switching personas. The `held` set keeps a request
+// from bouncing between bots. A successful handoff rewrites the
+// mic-holder; the run's prepareStep picks it up before the next step.
+function createHandoffTool(params: {
+  chatId: string
+  members: TurnBot[]
+  held: Set<string>
+  onHandoff: (target: TurnBot) => void
+}) {
   return tool({
     description:
       "Hand the conversation to another bot in this group when their job fits the user's message better than yours. The handoff takes effect immediately — the other bot continues as you and writes the reply, so do not answer yourself after a successful handoff.",
@@ -151,40 +157,48 @@ function createHandoffTool(chatId: string) {
         .describe("One short sentence on why that bot fits better."),
     }),
     execute: async ({ botId, reason }) => {
-      if (botId === currentBot.botId) {
+      const target = params.members.find((member) => member.id === botId)
+      if (!target) {
+        throw new Error("That bot is not a member of this group.")
+      }
+      if (target.id === currentBot.botId) {
         throw new Error("That is your own botId — pick a different member.")
       }
+      // Keeps a request from bouncing between bots
+      if (params.held.has(target.id)) {
+        Sentry.logger.warn("Handoff refused: bot already had it", {
+          "pandora.chat.id": params.chatId,
+          "pandora.handoff.from": currentBot.botId,
+          "pandora.handoff.to": target.id,
+        })
+        throw new Error(
+          `${target.name} already had this request. Answer it yourself.`
+        )
+      }
 
-      const [target] = await db
-        .select({ id: bots.id, name: bots.name, job: bots.job })
-        .from(bots)
-        .innerJoin(chatMembers, eq(chatMembers.botId, bots.id))
-        .where(and(eq(chatMembers.chatId, chatId), eq(bots.id, botId)))
-        .limit(1)
-
-      if (!target) throw new Error("That bot is not a member of this group.")
-
-      const from = currentBot.botId
-      currentBot.botId = target.id
       Sentry.logger.info("Turn handed off", {
-        "pandora.chat.id": chatId,
-        "pandora.handoff.from": from ?? "unknown",
+        "pandora.chat.id": params.chatId,
+        "pandora.handoff.from": currentBot.botId,
         "pandora.handoff.to": target.id,
       })
-      return { handedTo: target.name, theirJob: target.job, reason }
+
+      params.onHandoff(target)
+      return { botId: target.id, name: target.name, reason }
     },
   })
 }
 
+type HandoffTool = ReturnType<typeof createHandoffTool>
+
 // One durable conversation per chat id. History lives in the default
-// transcript storage (keyed by chatId); the bot's identity and personality
-// arrive from the browser as clientData on every turn. The message type pins
-// each tool part's input/output so the chat UI can render them typed, and
-// carries the responding bot's id so group chats can attribute each answer.
+// transcript storage (keyed by chatId); the answering bot is resolved from
+// the database each turn. The message type pins each tool part's
+// input/output so the chat UI can render them typed, and carries the
+// responding bot's id so group chats can attribute each answer.
 export type ChatMessageMetadata = { botId?: string }
 
 export type ChatMessage = InferChatUIMessageFromTools<
-  PandoraTools & { handoff: ReturnType<typeof createHandoffTool> }
+  PandoraTools & { handoff: HandoffTool }
 > & {
   metadata?: ChatMessageMetadata
 }
@@ -198,8 +212,8 @@ export const pandoraChat = chat.withUIMessage<ChatMessage>().agent({
     currentBot.init({ botId: clientData?.botId ?? undefined })
   },
   // Errored turns don't fail the run — the runtime converts the throw into an
-  // error chunk and keeps the session alive. Report them for monitoring; the
-  // quota gate in run() lands here too.
+  // error chunk and keeps the session alive. Report them for monitoring, and
+  // record the tokens they spent all the same (fires for stopped turns too).
   onTurnComplete: async ({ chatId, totalUsage, stopped, error }) => {
     Sentry.logger.info("Chat turn completed", {
       "pandora.chat.id": chatId,
@@ -211,42 +225,92 @@ export const pandoraChat = chat.withUIMessage<ChatMessage>().agent({
     if (error) {
       Sentry.captureException(error, { tags: { chatId } })
     }
+
+    // A stopped or failed turn still consumed model tokens; the stream's
+    // onFinish does not run for them, so the ledger entry is written here.
+    try {
+      const tokens =
+        (totalUsage.inputTokens ?? 0) + (totalUsage.outputTokens ?? 0)
+      const userId = await chatUserId(chatId)
+      if (userId && tokens > 0) {
+        await recordTurnUsage({ chatId, userId, tokens, sandboxMinutes: 0 })
+      }
+    } catch (ledgerError) {
+      Sentry.captureException(ledgerError, {
+        tags: { "pandora.chat.id": chatId },
+      })
+    }
   },
-  // Resolved once per turn. Group chats additionally get the handoff tool,
-  // decided by the chat row — never by what the browser claims.
-  tools: async ({ chatId }) => {
-    const sandboxTools = createTools(chatId, () => currentBot.botId)
-    return (await chatKind(chatId)) === "group"
-      ? { ...sandboxTools, handoff: createHandoffTool(chatId) }
-      : sandboxTools
+  // Resolved per turn. The turn context is the DB's answer to who is in this
+  // chat; a handoff moves the mic and the sandbox tools to another member.
+  // Group chats additionally get the handoff tool — decided by the chat row,
+  // never by what the browser claims.
+  tools: async ({ chatId, clientData }) => {
+    const {
+      chat: row,
+      members,
+      bot,
+    } = await getTurnContext(chatId, clientData?.botId)
+
+    // Whoever holds the turn; a handoff moves it, and the sandbox tools with it
+    let current = bot
+    const held = new Set([bot.id])
+
+    // Sandbox tools exist only for a bot that has a sandbox to point at
+    const sandboxTools = current.sandboxId
+      ? createTools({
+          getSandboxId: () => current.sandboxId ?? undefined,
+          getUserId: () => row.userId,
+        })
+      : {}
+
+    if (row.kind !== "group") return sandboxTools
+
+    return {
+      ...sandboxTools,
+      handoff: createHandoffTool({
+        chatId: row.id,
+        members,
+        held,
+        onHandoff: (target) => {
+          current = target
+          held.add(target.id)
+          currentBot.botId = target.id
+        },
+      }),
+    }
   },
-  run: async ({ messages, clientData, chatId, signal, streamText, tools }) => {
+  run: async ({ chatId, clientData, messages, tools, signal, streamText }) => {
+    // Read every turn, so edits to the bots apply to the next message
+    const {
+      chat: row,
+      members,
+      bot,
+    } = await getTurnContext(chatId, clientData?.botId)
+    const group: GroupTurn | null =
+      row.kind === "group" ? { name: row.name, members } : null
+
     // The billable AI spend happens in this turn — check the token allowance
     // before any model call, so an exhausted plan blocks here instead of
     // streaming an answer it already paid for.
-    const userId = await chatUserId(chatId)
-    if (userId) await assertTokenQuota(userId)
+    await assertTokenQuota(row.userId)
 
     // Fresh turn: the mic returns to the composer's selection before anything
     // reads it.
-    currentBot.botId = clientData?.botId ?? undefined
-    const startBotId = currentBot.botId
-    const group = await groupForTurn(chatId)
+    currentBot.botId = bot.id
+    const startBotId = bot.id
     const turnStartedAt = Date.now()
 
-    // Every assistant message carries the bot that produced it — the final
-    // respondent once a handoff has switched speakers — so the UI can render
-    // its avatar in group chats.
+    // Every assistant message carries the bot that started it; after a
+    // handoff the reply's later sections are attributed through the handoff
+    // tool's output, so the UI can show who wrote each stretch.
     chat.setUIMessageStreamOptions({
-      messageMetadata: () => {
-        const botId = currentBot.botId
-        return botId ? { botId } : undefined
-      },
+      messageMetadata: () => ({ botId: startBotId }),
     })
 
     return streamText({
       model: chatModel,
-      system: systemPrompt(clientData, group),
+      system: systemPrompt(bot, group),
       // The transcript stores each turn's reasoning parts; fed back to a
       // reasoning model they get echoed — the previous answer reappeared
       // verbatim inside the next turn's thinking. Only final answers belong
@@ -266,28 +330,31 @@ export const pandoraChat = chat.withUIMessage<ChatMessage>().agent({
           ),
         }
       }),
-      tools: group ? tools : clientData?.sandboxId ? tools : {},
+      tools,
       // Room for a full computer-use loop: look, act, look again, repeat.
       stopWhen: isStepCount(30),
       abortSignal: signal,
       maxOutputTokens: 8192,
-      // The ledger entry for this turn. Tokens come straight from the
-      // aggregated usage; sandbox time is the turn's wall clock, charged in
-      // whole minutes and only when a sandbox tool actually ran (the handoff
-      // tool never touches one). Ledger failures must never fail a turn
-      // that already answered.
+      // The ledger entry for the turn's sandbox time: the turn's wall clock,
+      // charged in whole minutes and only when a sandbox tool actually ran
+      // (the handoff tool never touches one). Tokens are recorded in
+      // onTurnComplete, which also fires for stopped and failed turns.
+      // Ledger failures must never fail a turn that already answered.
       onFinish: async (event) => {
         try {
-          const tokens =
-            (event.usage.inputTokens ?? 0) + (event.usage.outputTokens ?? 0)
           const touchedSandbox = event.toolCalls.some(
             (call) => call.toolName !== "handoff"
           )
           const sandboxMinutes = touchedSandbox
             ? Math.max(1, Math.ceil((Date.now() - turnStartedAt) / 60_000))
             : 0
-          if (userId && (tokens > 0 || sandboxMinutes > 0)) {
-            await recordTurnUsage({ chatId, userId, tokens, sandboxMinutes })
+          if (sandboxMinutes > 0) {
+            await recordTurnUsage({
+              chatId,
+              userId: row.userId,
+              tokens: 0,
+              sandboxMinutes,
+            })
           }
         } catch (ledgerError) {
           // A dropped ledger entry is billing data loss — worth an issue.
@@ -302,21 +369,12 @@ export const pandoraChat = chat.withUIMessage<ChatMessage>().agent({
       // compaction and injected context keep working.
       prepareStep: group
         ? async () => {
-            const respondent = group.members.find(
+            const respondent = members.find(
               (member) => member.id === currentBot.botId
             )
             if (!respondent || respondent.id === startBotId) return
             return {
-              instructions: systemPrompt(
-                {
-                  name: respondent.name,
-                  job: respondent.job,
-                  instructions: respondent.instructions,
-                  sandboxId: respondent.sandboxId,
-                  botId: respondent.id,
-                },
-                group
-              ),
+              instructions: systemPrompt(respondent, group),
             }
           }
         : undefined,

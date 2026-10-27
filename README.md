@@ -46,7 +46,7 @@ Each bot is a persona: a name, a job, free-form instructions, and an avatar gene
 
 The interface is built with Tailwind CSS 4 and shadcn/ui on Base UI, and is protected by Clerk. Bots and chats live in Neon Postgres behind Drizzle. Replies stream from a Trigger.dev durable session through the AI SDK, so a turn survives a refresh and a reconnect picks the answer back up.
 
-The bot runtime is live. Every bot owns a Daytona Linux sandbox: it runs shell commands, reads and writes files, and drives its own desktop with mouse, keyboard, and screenshots. Group chats put several bots in one room; the composer picks who answers each message, and a bot can hand the conversation to a better-fit member mid-turn.
+The bot runtime is live. Every bot owns a Daytona Linux sandbox: it runs shell commands, reads and writes files, and drives its own desktop with mouse, keyboard, and screenshots. Group chats put several bots in one room; the composer picks who answers each message, and a bot can hand the conversation to a better-fit member mid-turn. A Trigger.dev cron meters every running sandbox in five-minute ticks and stops the sandboxes of accounts that have spent their allowance.
 
 ## Features
 
@@ -58,7 +58,7 @@ The bot runtime is live. Every bot owns a Daytona Linux sandbox: it runs shell c
 | **Durable chat**          | Streaming replies in a Trigger.dev session with a stored transcript, a stop control, and resume after reload.                                    |
 | **Rich responses**        | Markdown rendered with Streamdown, including syntax-highlighted code, math, Mermaid diagrams, and collapsible reasoning when the model emits it. |
 | **Message actions**       | Copy any reply and regenerate the last response; `↑` / `↓` recalls your earlier messages.                                                        |
-| **Sandbox tools**         | Bash, file read/write/list, and computer use — mouse, keyboard, screenshots — inside the bot's own Daytona Linux sandbox.                        |
+| **Sandbox tools**         | Bash, file read/write/list, and computer use — mouse, drag, keyboard, screenshots — inside the bot's own Daytona Linux sandbox.                  |
 | **Live desktop**          | Watch the bot work in a resizable noVNC panel beside the chat; the sandbox boots only when you open it.                                          |
 | **Group chats**           | Put several bots in one chat, pick who answers each message, and let bots hand off to a better-fit member mid-turn.                              |
 | **Workspace sidebar**     | Chats ordered by activity with the bot's name, avatar, and stored message preview. Edit or delete a bot from its chat header.                    |

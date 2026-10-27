@@ -34,6 +34,12 @@ function monthStart() {
 const PERIOD_CACHE_TTL_MS = 60_000
 const periodCache = new Map<string, { period: Period; at: number }>()
 
+// A passed quota check also holds for a minute: a turn's model may make
+// dozens of sandbox tool calls, and re-running the Clerk + ledger reads for
+// each would be waste — the cron meter is what catches slow overruns.
+const PASS_CACHE_TTL_MS = 60_000
+const passCache = new Map<string, number>()
+
 async function billingPeriod(userId: string): Promise<Period> {
   const cached = periodCache.get(userId)
   if (cached && Date.now() - cached.at < PERIOD_CACHE_TTL_MS) {
@@ -133,6 +139,10 @@ async function assertWithinQuota(
   userId: string,
   kind: "ai_tokens" | "sandbox_minutes"
 ) {
+  const cacheKey = `${userId}:${kind}`
+  const passedAt = passCache.get(cacheKey)
+  if (passedAt && Date.now() - passedAt < PASS_CACHE_TTL_MS) return
+
   const period = await billingPeriod(userId)
   if (!period.planSlug) {
     throw new Error("This feature requires a paid plan.")
@@ -147,6 +157,8 @@ async function assertWithinQuota(
       `${label} limit reached for this period. It resets with your next billing period.`
     )
   }
+
+  passCache.set(cacheKey, Date.now())
 }
 
 export async function assertTokenQuota(userId: string) {
@@ -155,4 +167,26 @@ export async function assertTokenQuota(userId: string) {
 
 export async function assertSandboxQuota(userId: string) {
   await assertWithinQuota(userId, "sandbox_minutes")
+}
+
+// Non-throwing form for the sandbox meter: whether the user may still run
+// sandboxes at all. False for free plans and spent allowances alike — both
+// mean their running sandboxes should be stopped.
+export async function isWithinSandboxQuota(userId: string) {
+  try {
+    await assertWithinQuota(userId, "sandbox_minutes")
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Appends the meter's sighting of running sandboxes to the ledger. The cron
+// retries failed runs, and the ledger has no idempotency key, so a retried
+// run bills the same sighting twice — acceptable at five-minute grain.
+export async function recordSandboxUsage(userId: string, minutes: number) {
+  if (minutes <= 0) return
+  await db
+    .insert(usageEntries)
+    .values({ userId, kind: "sandbox_minutes", amount: minutes })
 }

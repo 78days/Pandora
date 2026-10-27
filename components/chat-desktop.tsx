@@ -143,17 +143,13 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
           showCloseButton={false}
           className="flex h-svh w-screen max-w-none flex-col gap-0 rounded-none p-0 ring-0 sm:max-w-none"
         >
-          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-white/15 bg-black px-4 text-white">
+          <div className="flex h-10 shrink-0 items-center gap-2 border-b px-4">
             <DialogTitle className="text-sm font-semibold">
               {name}&apos;s desktop
             </DialogTitle>
             <DialogClose
               render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="ml-auto text-white hover:bg-white/10 hover:text-white"
-                />
+                <Button variant="ghost" size="icon" className="ml-auto" />
               }
             >
               <XIcon />

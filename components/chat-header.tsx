@@ -19,10 +19,10 @@ function ChatHeader({ bot }: { bot: EditableBot }) {
 
   return (
     <>
-      <header className="flex h-10 items-center gap-2 border-b border-white/15 bg-black px-4 text-white">
+      <header className="flex h-10 items-center gap-2 border-b px-4">
         <Button
           variant="ghost"
-          className="gap-2 px-2 text-sm font-semibold text-white hover:bg-white/10 hover:text-white"
+          className="gap-2 px-2 text-sm font-semibold"
           onClick={() => setEditOpen(true)}
         >
           <ChatAvatar seed={bot.avatar} className="size-5" />
@@ -32,7 +32,7 @@ function ChatHeader({ bot }: { bot: EditableBot }) {
         <Button
           variant="ghost"
           size="icon"
-          className="ml-auto text-white hover:bg-white/10 hover:text-white"
+          className="ml-auto"
           aria-label="Desktop view"
           aria-pressed={desktop.open}
           onClick={() => {
@@ -63,10 +63,10 @@ function GroupChatHeader({
 
   return (
     <>
-      <header className="flex h-10 items-center gap-2 border-b border-white/15 bg-black px-4 text-white">
+      <header className="flex h-10 items-center gap-2 border-b px-4">
         <Button
           variant="ghost"
-          className="gap-2 px-2 text-sm font-semibold text-white hover:bg-white/10 hover:text-white"
+          className="gap-2 px-2 text-sm font-semibold"
           onClick={() => setEditOpen(true)}
         >
           <GroupChatAvatar

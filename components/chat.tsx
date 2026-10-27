@@ -95,7 +95,6 @@ type Load =
       // Hydrating the session (without `isStreaming`) is what lets the
       // reconnect reattach to a turn that is still generating after a reload.
       initialSessions?: Record<string, ChatSessionPersistedState>
-      resumeError?: string
     }
 
 export function Chat({
@@ -116,15 +115,10 @@ export function Chat({
   tokenUsage: { used: number; limit: number } | null
 }) {
   const [load, setLoad] = useState<Load>({ chatId, status: "loading" })
-  // The session is initialized with the first member's identity; the
-  // transport's live clientData carries the composer's selection per turn.
-  const {
-    id: firstBotId,
-    name: firstBotName,
-    job: firstBotJob,
-    instructions: firstBotInstructions,
-    sandboxId: firstBotSandboxId,
-  } = members[0]
+  // The session is initialized with the first member; the transport's live
+  // clientData carries the composer's selection per turn. Only the bot id is
+  // sent — the agent resolves everything else from the database.
+  const firstBotId = members[0].id
 
   useEffect(() => {
     let cancelled = false
@@ -136,7 +130,6 @@ export function Chat({
 
         let initialSessions:
           Record<string, ChatSessionPersistedState> | undefined
-        let resumeError: string | undefined
         if (transcript.messages.length > 0) {
           try {
             // Idempotent on (env, chatId). The token lets the reconnect
@@ -144,13 +137,7 @@ export function Chat({
             // opens the stream and the server closes it fast if settled.
             const session = await startChatSession({
               chatId,
-              clientData: {
-                name: firstBotName,
-                job: firstBotJob,
-                instructions: firstBotInstructions,
-                sandboxId: firstBotSandboxId,
-                botId: firstBotId,
-              },
+              clientData: { botId: firstBotId },
             })
             initialSessions = {
               [chatId]: {
@@ -158,9 +145,8 @@ export function Chat({
                 lastEventId: transcript.cursors?.lastOutEventId,
               },
             }
-          } catch (error) {
+          } catch {
             // Resume is best-effort; the chat works without it.
-            resumeError = error instanceof Error ? error.message : String(error)
           }
         }
 
@@ -170,7 +156,6 @@ export function Chat({
             status: "ready",
             initialMessages: transcript.messages as ChatMessage[],
             initialSessions,
-            resumeError,
           })
         }
       } catch (error) {
@@ -188,14 +173,7 @@ export function Chat({
     return () => {
       cancelled = true
     }
-  }, [
-    chatId,
-    firstBotId,
-    firstBotName,
-    firstBotJob,
-    firstBotInstructions,
-    firstBotSandboxId,
-  ])
+  }, [chatId, firstBotId])
 
   // State from a previous chatId (navigating between chats) counts as loading.
   const current = load.chatId === chatId ? load : null
@@ -227,7 +205,6 @@ export function Chat({
       tokenUsage={tokenUsage}
       initialMessages={current.initialMessages}
       initialSessions={current.initialSessions}
-      resumeError={current.resumeError}
     />
   )
 }
@@ -240,7 +217,6 @@ function ChatView({
   tokenUsage,
   initialMessages,
   initialSessions,
-  resumeError,
 }: {
   chatId: string
   kind: "direct" | "group"
@@ -249,10 +225,7 @@ function ChatView({
   tokenUsage: { used: number; limit: number } | null
   initialMessages: ChatMessage[]
   initialSessions?: Record<string, ChatSessionPersistedState>
-  resumeError?: string
 }) {
-  // TEMPORARY debug strip data — counts of transport lifecycle events.
-  const [streamEvents, setStreamEvents] = useState<Record<string, number>>({})
   const isBillable = useBillable()
   const router = useRouter()
 
@@ -268,24 +241,13 @@ function ChatView({
     accessToken: ({ chatId }) => mintChatAccessToken(chatId),
     startSession: ({ chatId, clientData }) =>
       startChatSession({ chatId, clientData }),
-    // Untrusted input by design: it only shapes the bot's personality.
-    // Ownership is enforced server-side in the actions, and the sandbox a
-    // turn may touch is resolved from the DB by chatId + botId membership.
-    // Live-updates on a composer selection so the next send targets that bot.
+    // Untrusted input by design: it only picks which member answers, and the
+    // agent resolves that against the chat's DB membership. Live-updated on a
+    // composer selection so the next send targets that bot.
     clientData: {
-      name: selectedBot.name,
-      job: selectedBot.job,
-      instructions: selectedBot.instructions,
-      sandboxId: selectedBot.sandboxId,
       botId: selectedBot.id,
     },
     sessions: initialSessions,
-    onEvent: (event) => {
-      setStreamEvents((prev) => ({
-        ...prev,
-        [event.type]: (prev[event.type] ?? 0) + 1,
-      }))
-    },
   })
 
   const {
@@ -516,10 +478,6 @@ function ChatView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* TEMPORARY debug strip — remove once reload-resume is confirmed. */}
-      <div className="border-b border-dashed px-4 py-1 font-mono text-[10px] text-muted-foreground">
-        {`session=${initialSessions ? "ok" : resumeError ? `failed: ${resumeError}` : "none"} status=${status} msgs=${messages.length} events=${JSON.stringify(streamEvents)}`}
-      </div>
       <Conversation className="min-h-0 flex-1">
         {messages.length === 0 ? (
           <ConversationEmptyState
@@ -539,131 +497,159 @@ function ChatView({
         ) : (
           <ConversationContent>
             {messages.map((message, index) => {
-              const isLastAssistant =
-                index === messages.length - 1 && message.role === "assistant"
-              // Group chats attribute each answer to its bot through the
-              // metadata stamped server-side; messages without it (older
-              // history) render as before.
-              const messageBot =
-                kind === "group" && message.role === "assistant"
-                  ? members.find(
-                      (member) => member.id === message.metadata?.botId
-                    )
-                  : undefined
-              // ...and each user message names the bot it was addressed to,
-              // recorded at send time.
+              const isLastMessage = index === messages.length - 1
+              // Each user message names the bot it was addressed to, recorded
+              // at send time.
               const addressedBot =
                 kind === "group" && message.role === "user"
                   ? members.find(
                       (member) => member.id === message.metadata?.botId
                     )
                   : undefined
-              const messageParts = message.parts.map((part, partIndex) => {
-                switch (part.type) {
-                  case "text":
-                    return (
-                      <MessageResponse key={partIndex}>
-                        {part.text}
-                      </MessageResponse>
-                    )
-                  case "reasoning":
-                    return (
-                      <Reasoning
-                        defaultOpen={false}
-                        isStreaming={part.state === "streaming"}
-                        key={partIndex}
-                      >
-                        <ReasoningTrigger />
-                        <ReasoningContent>{part.text}</ReasoningContent>
-                      </Reasoning>
-                    )
-                }
 
-                if (part.type.startsWith("tool-")) {
-                  // The agent's own eyes: never part of the visible chat.
-                  if (part.type === "tool-view_screen") return null
-                  return <ToolCall part={part as ToolUIPart} key={partIndex} />
-                }
-              })
+              // A reply is one message even when a handoff changes who is
+              // writing it, so it is cut at each handoff and every stretch
+              // gets its own author. Only group chat replies get a face.
+              const sections: MessageSection[] =
+                message.role === "assistant" && kind === "group"
+                  ? splitByAuthor(message, members)
+                  : [{ author: undefined, parts: message.parts }]
 
-              return (
-                <Message
-                  className={
-                    messageBot ? "flex-row items-start gap-2" : undefined
-                  }
-                  from={message.role}
-                  key={message.id}
-                >
-                  {messageBot && (
-                    <ChatAvatar
-                      seed={messageBot.avatar}
-                      className="mt-0.5 size-6 shrink-0"
-                    />
-                  )}
-                  <div
-                    className={cn(
-                      "flex min-w-0 flex-col gap-2",
-                      messageBot && "flex-1"
-                    )}
-                  >
-                    <MessageContent>
-                      {addressedBot ? (
-                        // The tag rides on the first line, as if the user
-                        // named the bot at the start of their message.
-                        <div className="flex items-start gap-2">
-                          <Badge
-                            className="max-w-40 gap-1.5 pl-1"
-                            variant="outline"
-                          >
-                            <ChatAvatar
-                              seed={addressedBot.avatar}
-                              className="size-4 shrink-0"
-                            />
-                            <span className="truncate">
-                              {addressedBot.name}
-                            </span>
-                          </Badge>
-                          <div className="flex min-w-0 flex-1 flex-col gap-2">
-                            {messageParts}
-                          </div>
-                        </div>
-                      ) : (
-                        messageParts
-                      )}
-                    </MessageContent>
-                    {status !== "submitted" && (
-                      <MessageActions
-                        className={
-                          message.role === "user"
-                            ? "self-end opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-                            : isLastAssistant && status === "ready"
-                              ? "opacity-100 transition-opacity"
-                              : "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-                        }
-                      >
-                        <MessageAction
-                          onClick={() => void copyMessage(message)}
-                          tooltip={copiedId === message.id ? "Copied" : "Copy"}
+              return sections.map(({ author, parts }, sectionIndex) => {
+                const isLastSection =
+                  isLastMessage && sectionIndex === sections.length - 1
+                const messageParts = parts.map((part, partIndex) => {
+                  switch (part.type) {
+                    case "text":
+                      return (
+                        <MessageResponse key={partIndex}>
+                          {part.text}
+                        </MessageResponse>
+                      )
+                    case "reasoning":
+                      return (
+                        <Reasoning
+                          defaultOpen={false}
+                          isStreaming={part.state === "streaming"}
+                          key={partIndex}
                         >
-                          {copiedId === message.id ? (
-                            <CheckIcon className="size-4" />
-                          ) : (
-                            <CopyIcon className="size-4" />
-                          )}
-                        </MessageAction>
-                        {isLastAssistant && status === "ready" && (
-                          <MessageAction
-                            onClick={regenerateLast}
-                            tooltip="Regenerate"
-                          >
-                            <RefreshCwIcon className="size-4" />
-                          </MessageAction>
-                        )}
-                      </MessageActions>
+                          <ReasoningTrigger />
+                          <ReasoningContent>{part.text}</ReasoningContent>
+                        </Reasoning>
+                      )
+                  }
+
+                  if (part.type.startsWith("tool-")) {
+                    // The agent's own eyes: the header is feedback, the
+                    // screenshot itself stays private.
+                    if (part.type === "tool-view_screen") {
+                      return (
+                        <Tool key={partIndex}>
+                          <ToolHeader
+                            state={part.state}
+                            title="Looked at the screen"
+                            type={part.type}
+                          />
+                        </Tool>
+                      )
+                    }
+                    // The teammate's reply follows right below, so one line
+                    // is enough.
+                    if (part.type === "tool-handoff") {
+                      return (
+                        <HandoffLine
+                          key={partIndex}
+                          part={part as ToolUIPart}
+                        />
+                      )
+                    }
+                    return (
+                      <ToolCall part={part as ToolUIPart} key={partIndex} />
+                    )
+                  }
+                })
+
+                return (
+                  <Message
+                    className={
+                      author ? "flex-row items-start gap-2" : undefined
+                    }
+                    from={message.role}
+                    key={`${message.id}-${sectionIndex}`}
+                  >
+                    {author && (
+                      <ChatAvatar
+                        seed={author.avatar}
+                        className="mt-0.5 size-6 shrink-0"
+                      />
                     )}
-                  </div>
-                </Message>
-              )
+                    <div
+                      className={cn(
+                        "flex min-w-0 flex-col gap-2",
+                        author && "flex-1"
+                      )}
+                    >
+                      <MessageContent>
+                        {addressedBot ? (
+                          // The tag rides on the first line, as if the user
+                          // named the bot at the start of their message.
+                          <div className="flex items-start gap-2">
+                            <Badge
+                              className="max-w-40 gap-1.5 pl-1"
+                              variant="outline"
+                            >
+                              <ChatAvatar
+                                seed={addressedBot.avatar}
+                                className="size-4 shrink-0"
+                              />
+                              <span className="truncate">
+                                {addressedBot.name}
+                              </span>
+                            </Badge>
+                            <div className="flex min-w-0 flex-1 flex-col gap-2">
+                              {messageParts}
+                            </div>
+                          </div>
+                        ) : (
+                          messageParts
+                        )}
+                      </MessageContent>
+                      {status !== "submitted" && (
+                        <MessageActions
+                          className={
+                            message.role === "user"
+                              ? "self-end opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+                              : isLastSection && status === "ready"
+                                ? "opacity-100 transition-opacity"
+                                : "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+                          }
+                        >
+                          <MessageAction
+                            onClick={() => void copyMessage(message)}
+                            tooltip={
+                              copiedId === message.id ? "Copied" : "Copy"
+                            }
+                          >
+                            {copiedId === message.id ? (
+                              <CheckIcon className="size-4" />
+                            ) : (
+                              <CopyIcon className="size-4" />
+                            )}
+                          </MessageAction>
+                          {isLastSection && status === "ready" && (
+                            <MessageAction
+                              onClick={regenerateLast}
+                              tooltip="Regenerate"
+                            >
+                              <RefreshCwIcon className="size-4" />
+                            </MessageAction>
+                          )}
+                        </MessageActions>
+                      )}
+                    </div>
+                  </Message>
+                )
+              })
             })}
             {status === "submitted" && (
               <div
@@ -797,6 +783,40 @@ function ChatView({
   )
 }
 
+type MessageSection = {
+  author: ChatMember | undefined
+  parts: ChatMessage["parts"]
+}
+
+// A reply is one message even when a handoff changes who is writing it, so it
+// is cut at each handoff and every stretch gets its own author: the bot that
+// started the reply owns everything before the handoff tool call, and each
+// handed-off stretch belongs to the bot named in its output.
+function splitByAuthor(
+  message: ChatMessage,
+  members: ChatMember[]
+): MessageSection[] {
+  const findMember = (botId?: string) =>
+    members.find((member) => member.id === botId)
+
+  let section: MessageSection = {
+    author: findMember(message.metadata?.botId),
+    parts: [],
+  }
+  const sections = [section]
+
+  for (const part of message.parts) {
+    section.parts.push(part)
+
+    if (part.type === "tool-handoff" && part.state === "output-available") {
+      section = { author: findMember(part.output.botId), parts: [] }
+      sections.push(section)
+    }
+  }
+
+  return sections
+}
+
 const toolTitles: Record<string, string> = {
   bash: "Ran a command",
   read_file: "Read a file",
@@ -804,11 +824,11 @@ const toolTitles: Record<string, string> = {
   list_files: "Listed files",
   mouse_click: "Clicked",
   mouse_move: "Moved the mouse",
+  mouse_drag: "Dragged",
   mouse_scroll: "Scrolled",
   keyboard_type: "Typed text",
   keyboard_press: "Pressed a key",
   show_screen: "Showed the screen",
-  handoff: "Handed off",
   get_memory: "Checked memory",
   set_memory: "Remembered",
 }
@@ -841,6 +861,20 @@ function OutputBlock({ children }: { children: ReactNode }) {
     <pre className="max-h-80 overflow-auto rounded-md bg-muted/50 p-3 font-mono text-xs whitespace-pre-wrap">
       {children}
     </pre>
+  )
+}
+
+// A handoff is not a tool call worth a card: the teammate's reply follows
+// right below, so one visible line is enough.
+function HandoffLine({ part }: { part: ToolUIPart }) {
+  const output = part.state === "output-available" ? part.output : undefined
+  const name = asText(field(output, "name"))
+  const reason = asText(field(output, "reason"))
+  if (!name) return <ToolNote>Handing off to another bot…</ToolNote>
+  return (
+    <ToolNote>
+      Handed off to {name}.{reason ? ` ${reason}` : ""}
+    </ToolNote>
   )
 }
 
@@ -972,6 +1006,15 @@ function ToolDetails({
         </ToolLine>
       )
 
+    case "mouse_drag":
+      return (
+        <ToolLine>
+          Dragged from {asNumber(field(input, "startX"))},{" "}
+          {asNumber(field(input, "startY"))} to {asNumber(field(input, "endX"))}
+          , {asNumber(field(input, "endY"))}
+        </ToolLine>
+      )
+
     case "mouse_scroll":
       return (
         <ToolLine>
@@ -1016,17 +1059,6 @@ function ToolDetails({
           className="max-w-full rounded-md border"
           src={`data:${asText(field(output, "mediaType")) || "image/jpeg"};base64,${base64}`}
         />
-      )
-    }
-
-    case "handoff": {
-      const name = asText(field(output, "handedTo"))
-      const reason = asText(field(output, "reason"))
-      if (!name) return <ToolNote>Handing off to another bot…</ToolNote>
-      return (
-        <ToolNote>
-          Handed off to {name}.{reason ? ` ${reason}` : ""}
-        </ToolNote>
       )
     }
 
