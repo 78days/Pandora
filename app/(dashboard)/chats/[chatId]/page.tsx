@@ -6,6 +6,7 @@ import { ChatDesktop } from "@/components/chat-desktop"
 import { ChatHeader, GroupChatHeader } from "@/components/chat-header"
 import { ChatPanels } from "@/components/chat-panels"
 import { getChat } from "@/queries/chats"
+import { getUsageSummary } from "@/queries/usage"
 
 export default async function ChatPage({
   params,
@@ -16,6 +17,7 @@ export default async function ChatPage({
   const { chatId } = await params
   const chat = await getChat(chatId)
   if (!chat) notFound()
+  const usage = await getUsageSummary()
 
   return (
     <ChatPanels
@@ -46,6 +48,11 @@ export default async function ChatPage({
             : chat.members[0].name
         }
         members={chat.members}
+        tokenUsage={
+          usage
+            ? { used: usage.used.aiTokens, limit: usage.limits.aiTokens }
+            : null
+        }
       />
     </ChatPanels>
   )

@@ -1,6 +1,7 @@
 import { relations } from "drizzle-orm"
 import {
   index,
+  integer,
   pgEnum,
   pgTable,
   primaryKey,
@@ -70,6 +71,34 @@ export const chatMembers = pgTable(
   (table) => [
     primaryKey({ columns: [table.chatId, table.botId] }),
     index("chat_members_bot_id_idx").on(table.botId),
+  ]
+)
+
+export const usageKind = pgEnum("usage_kind", ["ai_tokens", "sandbox_minutes"])
+
+// Append-only usage ledger. Rows are bare facts (what happened, when, how
+// much); the subscription period is applied as a filter at read time, not
+// stored — so recording never needs to know the period.
+export const usageEntries = pgTable(
+  "usage_entries",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => nanoid()),
+    userId: text("user_id").notNull(),
+    chatId: text("chat_id"),
+    kind: usageKind("kind").notNull(),
+    amount: integer("amount").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("usage_entries_user_kind_created_idx").on(
+      table.userId,
+      table.kind,
+      table.createdAt
+    ),
   ]
 )
 

@@ -1,6 +1,11 @@
 "use server"
 
-import { requirePaidPlan } from "@/lib/billing-server"
+import * as Sentry from "@sentry/nextjs"
+
+import {
+  requirePaidPlan,
+  requireWithinSandboxQuota,
+} from "@/lib/billing-server"
 import { getDaytona } from "@/lib/daytona"
 import { getChat } from "@/queries/chats"
 
@@ -14,8 +19,10 @@ const URL_TTL_SECONDS = 86_400
 // boot a sandbox. Signed URLs are port-scoped and can be embedded in an
 // iframe; the sandbox-wide preview token cannot.
 export async function getDesktopUrl(chatId: string) {
-  // Opening the desktop view connects to the bot's sandbox.
+  // Opening the desktop view connects to the bot's sandbox — a metered
+  // resource like any other tool use.
   await requirePaidPlan()
+  await requireWithinSandboxQuota()
   const chat = await getChat(chatId)
   if (!chat) throw new Error("Chat not found")
   // Only a direct chat's bot has a desktop; group chats never mount the panel.
@@ -29,5 +36,10 @@ export async function getDesktopUrl(chatId: string) {
   }
 
   const { url } = await sandbox.getSignedPreviewUrl(NOVNC_PORT, URL_TTL_SECONDS)
+
+  Sentry.logger.info("Desktop preview URL issued", {
+    "pandora.chat.id": chatId,
+  })
+
   return url
 }

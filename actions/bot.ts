@@ -5,6 +5,8 @@ import { DaytonaNotFoundError } from "@daytona/sdk"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import { nanoid } from "nanoid"
 
+import * as Sentry from "@sentry/nextjs"
+
 import { db } from "@/db"
 import { bots, botsInsertSchema, chatMembers, chats } from "@/db/schema"
 import { requirePaidPlan } from "@/lib/billing-server"
@@ -56,6 +58,11 @@ export async function createBot(input: unknown) {
       db.insert(chatMembers).values({ chatId, botId }),
     ])
 
+    Sentry.logger.info("Bot created", {
+      "pandora.bot.id": bot[0].id,
+      "pandora.chat.id": chat[0].id,
+    })
+
     return { bot: bot[0], chat: chat[0] }
   } catch (error) {
     // Best effort: the sandbox would be orphaned without its bot row.
@@ -73,6 +80,8 @@ export async function updateBot(botId: string, input: unknown) {
     .update(bots)
     .set(data)
     .where(and(eq(bots.id, botId), eq(bots.userId, userId)))
+
+  Sentry.logger.info("Bot updated", { "pandora.bot.id": botId })
 }
 
 export async function deleteBot(botId: string) {
@@ -116,4 +125,6 @@ export async function deleteBot(botId: string) {
       ),
     db.delete(bots).where(and(eq(bots.id, botId), eq(bots.userId, userId))),
   ])
+
+  Sentry.logger.info("Bot deleted", { "pandora.bot.id": botId })
 }

@@ -4,6 +4,8 @@ import { cn } from "cn"
 import { LoaderCircleIcon, Maximize2Icon, XIcon } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
+import * as Sentry from "@sentry/nextjs"
+
 import { getDesktopUrl } from "@/actions/desktop"
 import { useDesktopPanel } from "@/components/chat-panels"
 import { Button } from "@/components/ui/button"
@@ -49,12 +51,15 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
 
   useEffect(() => {
     if (!src) return
+    // The iframe loads our own noVNC client, whose websocket connects the
+    // browser straight to the sandbox's signed preview URL — a websocket
+    // handshake never renders Daytona's preview warning page, which would
+    // otherwise intercept every browser navigation to the preview link.
+    const wsUrl = `wss://${new URL(src).host}/websockify`
     const frame = document.createElement("iframe")
-    frame.src = `${src}/vnc.html?autoconnect=1&resize=scale&reconnect=1`
+    frame.src = `/desktop/vnc?ws=${encodeURIComponent(wsUrl)}`
     frame.title = `${name}'s desktop`
     frame.className = frameClassName(false)
-    frame.allow = "clipboard-read; clipboard-write"
-    frame.allowFullscreen = true
     frameRef.current = frame
     previewRef.current?.appendChild(frame)
     return () => {
@@ -98,7 +103,12 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
             <button
               type="button"
               className="absolute inset-0 cursor-zoom-in"
-              onClick={() => setFullscreen(true)}
+              onClick={() => {
+                Sentry.logger.info("Desktop fullscreen opened", {
+                  "pandora.chat.id": chatId,
+                })
+                setFullscreen(true)
+              }}
               aria-label="Open desktop in fullscreen"
             />
             <span className="pointer-events-none absolute right-2 bottom-2 rounded-md bg-black/60 p-1.5 text-white">

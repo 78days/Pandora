@@ -6,7 +6,9 @@ import { z } from "zod"
 import { db } from "../db"
 import { bots, chatMembers, chats } from "../db/schema"
 import { chatModel } from "../lib/ai"
+import { Sentry } from "./sentry"
 import { createTools, type PandoraTools } from "./tools"
+import { assertTokenQuota, chatUserId, recordTurnUsage } from "./usage"
 
 const clientDataSchema = z.object({
   name: z.string().min(1),
@@ -162,7 +164,13 @@ function createHandoffTool(chatId: string) {
 
       if (!target) throw new Error("That bot is not a member of this group.")
 
+      const from = currentBot.botId
       currentBot.botId = target.id
+      Sentry.logger.info("Turn handed off", {
+        "pandora.chat.id": chatId,
+        "pandora.handoff.from": from ?? "unknown",
+        "pandora.handoff.to": target.id,
+      })
       return { handedTo: target.name, theirJob: target.job, reason }
     },
   })
@@ -189,6 +197,21 @@ export const pandoraChat = chat.withUIMessage<ChatMessage>().agent({
   onBoot: async ({ clientData }) => {
     currentBot.init({ botId: clientData?.botId ?? undefined })
   },
+  // Errored turns don't fail the run — the runtime converts the throw into an
+  // error chunk and keeps the session alive. Report them for monitoring; the
+  // quota gate in run() lands here too.
+  onTurnComplete: async ({ chatId, totalUsage, stopped, error }) => {
+    Sentry.logger.info("Chat turn completed", {
+      "pandora.chat.id": chatId,
+      "pandora.tokens":
+        (totalUsage.inputTokens ?? 0) + (totalUsage.outputTokens ?? 0),
+      "pandora.stopped": stopped,
+      "pandora.errored": error !== undefined,
+    })
+    if (error) {
+      Sentry.captureException(error, { tags: { chatId } })
+    }
+  },
   // Resolved once per turn. Group chats additionally get the handoff tool,
   // decided by the chat row — never by what the browser claims.
   tools: async ({ chatId }) => {
@@ -198,11 +221,18 @@ export const pandoraChat = chat.withUIMessage<ChatMessage>().agent({
       : sandboxTools
   },
   run: async ({ messages, clientData, chatId, signal, streamText, tools }) => {
+    // The billable AI spend happens in this turn — check the token allowance
+    // before any model call, so an exhausted plan blocks here instead of
+    // streaming an answer it already paid for.
+    const userId = await chatUserId(chatId)
+    if (userId) await assertTokenQuota(userId)
+
     // Fresh turn: the mic returns to the composer's selection before anything
     // reads it.
     currentBot.botId = clientData?.botId ?? undefined
     const startBotId = currentBot.botId
     const group = await groupForTurn(chatId)
+    const turnStartedAt = Date.now()
 
     // Every assistant message carries the bot that produced it — the final
     // respondent once a handoff has switched speakers — so the UI can render
@@ -241,6 +271,31 @@ export const pandoraChat = chat.withUIMessage<ChatMessage>().agent({
       stopWhen: isStepCount(30),
       abortSignal: signal,
       maxOutputTokens: 8192,
+      // The ledger entry for this turn. Tokens come straight from the
+      // aggregated usage; sandbox time is the turn's wall clock, charged in
+      // whole minutes and only when a sandbox tool actually ran (the handoff
+      // tool never touches one). Ledger failures must never fail a turn
+      // that already answered.
+      onFinish: async (event) => {
+        try {
+          const tokens =
+            (event.usage.inputTokens ?? 0) + (event.usage.outputTokens ?? 0)
+          const touchedSandbox = event.toolCalls.some(
+            (call) => call.toolName !== "handoff"
+          )
+          const sandboxMinutes = touchedSandbox
+            ? Math.max(1, Math.ceil((Date.now() - turnStartedAt) / 60_000))
+            : 0
+          if (userId && (tokens > 0 || sandboxMinutes > 0)) {
+            await recordTurnUsage({ chatId, userId, tokens, sandboxMinutes })
+          }
+        } catch (ledgerError) {
+          // A dropped ledger entry is billing data loss — worth an issue.
+          Sentry.captureException(ledgerError, {
+            tags: { "pandora.chat.id": chatId },
+          })
+        }
+      },
       // After a handoff tool call, every later step of this turn runs as the
       // target bot: `instructions` replaces the system prompt and carries
       // forward. The SDK chains this after its own prepareStep, so steering,

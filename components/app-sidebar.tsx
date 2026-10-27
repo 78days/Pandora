@@ -1,13 +1,17 @@
 "use client"
 
 import { UserButton } from "@clerk/nextjs"
-import { PlusIcon, SearchIcon, UsersIcon } from "lucide-react"
+import { useSubscription } from "@clerk/nextjs/experimental"
+import { formatDistanceToNowStrict } from "date-fns"
+import { GaugeIcon, PlusIcon, SearchIcon, UsersIcon } from "lucide-react"
+import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useState } from "react"
 
 import { BotDialog } from "@/components/bot-dialog"
 import { CloseSearchDialogProvider } from "@/components/chat-command-item"
 import { GroupChatDialog } from "@/components/group-chat-dialog"
 import { useBillable } from "@/hooks/use-billable"
+import { PAID_PLAN } from "@/lib/billing"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -46,6 +50,17 @@ export function AppSidebar({
   const [searchOpen, setSearchOpen] = useState(false)
   // Bot creation spins up a paid sandbox along with the bot itself.
   const isBillable = useBillable()
+  const router = useRouter()
+  // The usage entry in the user menu counts down the current subscription
+  // period; billing data is absent (disabled or free tier) → plain "Usage".
+  const { data: subscription } = useSubscription()
+  const paidItem = subscription?.subscriptionItems.find(
+    (item) => item.plan?.slug === PAID_PLAN
+  )
+  const resetsIn =
+    paidItem?.periodEnd != null
+      ? formatDistanceToNowStrict(new Date(paidItem.periodEnd))
+      : null
   const closeSearchDialog = useCallback(() => setSearchOpen(false), [])
 
   useEffect(() => {
@@ -122,7 +137,19 @@ export function AppSidebar({
                           "min-w-0 truncate group-data-[collapsible=icon]:hidden",
                       },
                     }}
-                  />
+                  >
+                    <UserButton.MenuItems>
+                      <UserButton.Action
+                        label={
+                          resetsIn ? `Usage · resets in ${resetsIn}` : "Usage"
+                        }
+                        labelIcon={<GaugeIcon />}
+                        onClick={() => router.push("/usage")}
+                      />
+                      <UserButton.Action label="manageAccount" />
+                      <UserButton.Action label="signOut" />
+                    </UserButton.MenuItems>
+                  </UserButton>
                 }
               />
             </SidebarMenuItem>

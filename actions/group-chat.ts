@@ -1,5 +1,6 @@
 "use server"
 
+import * as Sentry from "@sentry/nextjs"
 import { auth } from "@clerk/nextjs/server"
 import { and, eq, inArray } from "drizzle-orm"
 import { nanoid } from "nanoid"
@@ -40,6 +41,11 @@ export async function createGroupChat(input: unknown) {
       }))
     ),
   ])
+
+  Sentry.logger.info("Group chat created", {
+    "pandora.chat.id": chatId,
+    "pandora.chat.members": data.botIds.length,
+  })
 
   return { chatId }
 }
@@ -87,6 +93,11 @@ export async function updateGroupChat(chatId: string, input: unknown) {
       }))
     ),
   ])
+
+  Sentry.logger.info("Group chat updated", {
+    "pandora.chat.id": chatId,
+    "pandora.chat.members": data.botIds.length,
+  })
 }
 
 export async function deleteGroupChat(chatId: string) {
@@ -104,4 +115,6 @@ export async function deleteGroupChat(chatId: string) {
         eq(chats.kind, "group")
       )
     )
+
+  Sentry.logger.info("Group chat deleted", { "pandora.chat.id": chatId })
 }

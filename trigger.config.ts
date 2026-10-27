@@ -1,4 +1,6 @@
-import { defineConfig } from "@trigger.dev/sdk";
+import { defineConfig } from "@trigger.dev/sdk"
+
+import { Sentry } from "./trigger/sentry"
 
 export default defineConfig({
   project: "proj_gthiexkzdhiitutbyzbi",
@@ -19,4 +21,9 @@ export default defineConfig({
     },
   },
   dirs: ["./trigger"],
-});
+  // Run-level monitoring: any failing task run is reported to Sentry with
+  // the failing task's id (see ./trigger/sentry for the SDK init).
+  onFailure: async ({ error, ctx }) => {
+    Sentry.captureException(error, { tags: { task: ctx.task.id } })
+  },
+})

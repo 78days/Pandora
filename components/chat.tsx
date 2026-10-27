@@ -9,6 +9,7 @@ import {
 import type { ToolUIPart } from "ai"
 import { cn } from "cn"
 import { CheckIcon, CopyIcon, RefreshCwIcon } from "lucide-react"
+import { useRouter } from "next/navigation"
 import {
   useCallback,
   useEffect,
@@ -63,6 +64,7 @@ import { useBillable } from "@/hooks/use-billable"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
+import { toast } from "@/components/ui/toast"
 import type { ChatMember } from "@/queries/chats"
 import type { pandoraChat } from "@/trigger/chat"
 
@@ -101,12 +103,17 @@ export function Chat({
   kind,
   name,
   members,
+  tokenUsage,
 }: {
   chatId: string
   kind: "direct" | "group"
   // Direct chats are named by their bot, groups by the dialog's name.
   name: string
   members: ChatMember[]
+  // The plan's AI token allowance for the current period, rendered
+  // server-side; slightly stale within a session (the trigger-side gate is
+  // the authoritative block).
+  tokenUsage: { used: number; limit: number } | null
 }) {
   const [load, setLoad] = useState<Load>({ chatId, status: "loading" })
   // The session is initialized with the first member's identity; the
@@ -217,6 +224,7 @@ export function Chat({
       kind={kind}
       name={name}
       members={members}
+      tokenUsage={tokenUsage}
       initialMessages={current.initialMessages}
       initialSessions={current.initialSessions}
       resumeError={current.resumeError}
@@ -229,6 +237,7 @@ function ChatView({
   kind,
   name,
   members,
+  tokenUsage,
   initialMessages,
   initialSessions,
   resumeError,
@@ -237,6 +246,7 @@ function ChatView({
   kind: "direct" | "group"
   name: string
   members: ChatMember[]
+  tokenUsage: { used: number; limit: number } | null
   initialMessages: ChatMessage[]
   initialSessions?: Record<string, ChatSessionPersistedState>
   resumeError?: string
@@ -244,6 +254,7 @@ function ChatView({
   // TEMPORARY debug strip data — counts of transport lifecycle events.
   const [streamEvents, setStreamEvents] = useState<Record<string, number>>({})
   const isBillable = useBillable()
+  const router = useRouter()
 
   // Who the next turn goes to. Direct chats have a single member; groups pick
   // in the composer. A stale id (navigated away and back) falls back to the
@@ -675,6 +686,19 @@ function ChatView({
             // Sending is the billable "bot usage" — every turn runs the bot
             // and can reach its sandbox through tools.
             if (!isBillable()) return
+            if (tokenUsage && tokenUsage.used >= tokenUsage.limit) {
+              toast.add({
+                type: "error",
+                title: "AI token limit reached",
+                description:
+                  "Your plan's allowance for this period is used up.",
+                actionProps: {
+                  children: "View usage",
+                  onClick: () => router.push("/usage"),
+                },
+              })
+              return
+            }
             const text = message.text?.trim()
             if (!text) return
             const sent = sentRef.current

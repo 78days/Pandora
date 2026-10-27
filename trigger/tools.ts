@@ -8,6 +8,7 @@ import { bots, chatMembers } from "../db/schema"
 import { chatModel } from "../lib/ai"
 import { getDaytona } from "../lib/daytona"
 import { MEMORY_FILE_PATH } from "../lib/memory"
+import { assertSandboxQuota, chatUserId } from "./usage"
 
 // Text results share one cap: a runaway `cat` of a huge file would otherwise
 // fill the model's context and the streamed tool-output record.
@@ -24,10 +25,16 @@ const clamp = (text: string) =>
 // fixed value: a handoff rewrites it mid-turn, so tool calls after the
 // handoff operate the new bot's sandbox. The lookup still runs through the
 // DB, so the bot must be a member of the chat for it to land on a sandbox.
+// Each call is also the meter's choke point: a plan with its sandbox
+// allowance spent fails here, which the model relays instead of the chat
+// dying.
 async function sandboxForChat(
   chatId: string,
   botId?: string
 ): Promise<Sandbox> {
+  const userId = await chatUserId(chatId)
+  if (userId) await assertSandboxQuota(userId)
+
   const [row] = await db
     .select({ sandboxId: bots.sandboxId })
     .from(bots)
