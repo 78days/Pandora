@@ -8,6 +8,7 @@ import { nanoid } from "nanoid"
 import { db } from "@/db"
 import { bots, botsInsertSchema, chatMembers, chats } from "@/db/schema"
 import { getDaytona } from "@/lib/daytona"
+import { MEMORY_FILE_PATH } from "@/lib/memory"
 
 // Bots for the group-chat dialog's checkbox list, fetched on open.
 export async function listBots() {
@@ -32,6 +33,13 @@ export async function createBot(input: unknown) {
   const sandbox = await getDaytona().create()
 
   try {
+    // Best effort: the agent's memory file starts blank; a failed upload
+    // only costs it recall (it creates the file on first write), so bot
+    // creation should not fail over it.
+    await sandbox.fs
+      .uploadFile(Buffer.alloc(0), MEMORY_FILE_PATH)
+      .catch(() => {})
+
     const [bot, chat] = await db.batch([
       db
         .insert(bots)

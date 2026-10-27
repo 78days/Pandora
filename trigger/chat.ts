@@ -96,6 +96,10 @@ function systemPrompt(
           "Call view_screen to look at the screen before clicking or typing into a GUI, and again after acting to check the result — it is your eyes and is never shown to the user.",
           "Call show_screen instead when the user asks to see the screen or what you are doing; it displays the screenshot in the chat.",
           "Mouse and keyboard tools use coordinates in screen pixels.",
+          "You also keep a persistent memory, shared across every conversation you take part in — private 1:1 chats and group chats alike — through the get_memory and set_memory tools.",
+          "When you learn something durable about the user — preferences, projects, ongoing threads, facts they share about themselves — call set_memory right away with a short one-line fact. Entries are appended in order; on the same topic, later ones supersede earlier ones.",
+          "Before answering anything that might depend on an earlier conversation — 'do you remember…', references to past chats, or anything they may have told you privately — call get_memory first and base your answer on what it returns.",
+          "Memory is how things said to you in private stay with you: note them as you go and you can recall them later, even when asked in a group chat.",
         ].join(" ")
       : undefined,
     clientData.instructions

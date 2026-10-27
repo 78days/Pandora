@@ -59,6 +59,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import { ChatAvatar } from "@/components/chat-avatar"
 import { GroupChatAvatar } from "@/components/group-chat-avatar"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import type { ChatMember } from "@/queries/chats"
@@ -536,6 +537,42 @@ function ChatView({
                       (member) => member.id === message.metadata?.botId
                     )
                   : undefined
+              // ...and each user message names the bot it was addressed to,
+              // recorded at send time.
+              const addressedBot =
+                kind === "group" && message.role === "user"
+                  ? members.find(
+                      (member) => member.id === message.metadata?.botId
+                    )
+                  : undefined
+              const messageParts = message.parts.map((part, partIndex) => {
+                switch (part.type) {
+                  case "text":
+                    return (
+                      <MessageResponse key={partIndex}>
+                        {part.text}
+                      </MessageResponse>
+                    )
+                  case "reasoning":
+                    return (
+                      <Reasoning
+                        defaultOpen={false}
+                        isStreaming={part.state === "streaming"}
+                        key={partIndex}
+                      >
+                        <ReasoningTrigger />
+                        <ReasoningContent>{part.text}</ReasoningContent>
+                      </Reasoning>
+                    )
+                }
+
+                if (part.type.startsWith("tool-")) {
+                  // The agent's own eyes: never part of the visible chat.
+                  if (part.type === "tool-view_screen") return null
+                  return <ToolCall part={part as ToolUIPart} key={partIndex} />
+                }
+              })
+
               return (
                 <Message
                   className={
@@ -557,38 +594,29 @@ function ChatView({
                     )}
                   >
                     <MessageContent>
-                      {message.parts.map((part, partIndex) => {
-                        switch (part.type) {
-                          case "text":
-                            return (
-                              <MessageResponse key={partIndex}>
-                                {part.text}
-                              </MessageResponse>
-                            )
-                          case "reasoning":
-                            return (
-                              <Reasoning
-                                defaultOpen={false}
-                                isStreaming={part.state === "streaming"}
-                                key={partIndex}
-                              >
-                                <ReasoningTrigger />
-                                <ReasoningContent>{part.text}</ReasoningContent>
-                              </Reasoning>
-                            )
-                        }
-
-                        if (part.type.startsWith("tool-")) {
-                          // The agent's own eyes: never part of the visible chat.
-                          if (part.type === "tool-view_screen") return null
-                          return (
-                            <ToolCall
-                              part={part as ToolUIPart}
-                              key={partIndex}
+                      {addressedBot ? (
+                        // The tag rides on the first line, as if the user
+                        // named the bot at the start of their message.
+                        <div className="flex items-start gap-2">
+                          <Badge
+                            className="max-w-40 gap-1.5 pl-1"
+                            variant="outline"
+                          >
+                            <ChatAvatar
+                              seed={addressedBot.avatar}
+                              className="size-4 shrink-0"
                             />
-                          )
-                        }
-                      })}
+                            <span className="truncate">
+                              {addressedBot.name}
+                            </span>
+                          </Badge>
+                          <div className="flex min-w-0 flex-1 flex-col gap-2">
+                            {messageParts}
+                          </div>
+                        </div>
+                      ) : (
+                        messageParts
+                      )}
                     </MessageContent>
                     {status !== "submitted" && (
                       <MessageActions
@@ -650,7 +678,13 @@ function ChatView({
               if (sent.length > 100) sent.shift()
             }
             historyIndexRef.current = null
-            sendMessage({ text })
+            // Group chats record the addressed bot on the message itself, so
+            // the badge survives reloads.
+            sendMessage({
+              text,
+              metadata:
+                kind === "group" ? { botId: selectedBot.id } : undefined,
+            })
           }}
         >
           <PromptInputBody>
@@ -746,6 +780,8 @@ const toolTitles: Record<string, string> = {
   keyboard_press: "Pressed a key",
   show_screen: "Showed the screen",
   handoff: "Handed off",
+  get_memory: "Checked memory",
+  set_memory: "Remembered",
 }
 
 function field(value: unknown, key: string): unknown {
@@ -961,6 +997,24 @@ function ToolDetails({
       return (
         <ToolNote>
           Handed off to {name}.{reason ? ` ${reason}` : ""}
+        </ToolNote>
+      )
+    }
+
+    case "get_memory": {
+      if (output === undefined) return <ToolNote>Checking memory…</ToolNote>
+      return (
+        <OutputBlock>
+          {asText(field(output, "memory")) || "(empty)"}
+        </OutputBlock>
+      )
+    }
+
+    case "set_memory": {
+      const content = asText(field(input, "content"))
+      return (
+        <ToolNote>
+          {content ? `Remembered: ${content}` : "Saving to memory…"}
         </ToolNote>
       )
     }

@@ -7,6 +7,7 @@ import { db } from "../db"
 import { bots, chatMembers } from "../db/schema"
 import { chatModel } from "../lib/ai"
 import { getDaytona } from "../lib/daytona"
+import { MEMORY_FILE_PATH } from "../lib/memory"
 
 // Text results share one cap: a runaway `cat` of a huge file would otherwise
 // fill the model's context and the streamed tool-output record.
@@ -206,6 +207,61 @@ export function createTools(
             size: file.size,
           })),
         }
+      },
+    }),
+
+    // The cross-conversation memory: one shared file in the bot's own sandbox,
+    // so facts learned in a private 1:1 chat are recallable everywhere,
+    // group chats included. Explicit tools rather than prompt-only file
+    // instructions — a named call is far more dependable than hoping the
+    // model re-derives the file path each turn. The sandbox getter keeps a
+    // handed-off turn on the new bot's memory.
+    get_memory: tool({
+      description:
+        "Read your persistent memory: facts you have saved about the user and your past conversations. The memory is shared across every chat you are in — private 1:1 and group chats — so this is where things said in private are recallable. Call this before answering any question that might depend on an earlier conversation.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const buffer = await (
+          await sandbox()
+        ).fs
+          .downloadFile(MEMORY_FILE_PATH)
+          .catch(() => null)
+        const memory = buffer?.toString("utf8") ?? ""
+        // Memories only ever grow; when the log outgrows the context, the
+        // most recent entries at the tail are the ones that matter.
+        return {
+          memory:
+            memory.length > MAX_OUTPUT_CHARS
+              ? `[older memories truncated]\n${memory.slice(-MAX_OUTPUT_CHARS)}`
+              : memory,
+        }
+      },
+    }),
+
+    set_memory: tool({
+      description:
+        "Save a durable fact to your persistent memory — something about the user, their preferences, projects, or ongoing threads. The memory is shared across every chat you are in, so things learned in a private chat are recallable everywhere, group chats included. One short fact per call; entries are appended in order and later ones supersede earlier ones on the same topic.",
+      inputSchema: z.object({
+        content: z
+          .string()
+          .min(1)
+          .describe('The fact to remember, e.g. "The user\'s name is Ali."'),
+      }),
+      execute: async ({ content }) => {
+        const line = content.trim()
+        if (!line) return { saved: "" }
+
+        const fs = (await sandbox()).fs
+        const previous = await fs
+          .downloadFile(MEMORY_FILE_PATH)
+          .then((buffer) => buffer.toString("utf8"))
+          .catch(() => "")
+        const next =
+          previous === "" || previous.endsWith("\n")
+            ? previous + line + "\n"
+            : previous + "\n" + line + "\n"
+        await fs.uploadFile(Buffer.from(next), MEMORY_FILE_PATH)
+        return { saved: line }
       },
     }),
 
