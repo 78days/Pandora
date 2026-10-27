@@ -1,10 +1,15 @@
 "use client"
 
-import { cn } from "cn"
-import { LoaderCircleIcon, RefreshCwIcon, XIcon } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
-
+import type RFB from "@novnc/novnc"
 import * as Sentry from "@sentry/nextjs"
+import { LoaderCircleIcon, RefreshCwIcon, XIcon } from "lucide-react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
 
 import { getDesktopUrl } from "@/actions/desktop"
 import { useDesktopPanel } from "@/components/chat-panels"
@@ -16,74 +21,130 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 
-// One iframe drives both surfaces. Reparenting an iframe reloads its browsing
-// context (which restarts VNC), so fullscreen is a CSS position, not a DOM move.
-function frameClassName(fullscreen: boolean) {
-  return cn(
-    "border-0 bg-black",
-    fullscreen
-      ? "pointer-events-auto fixed top-10 left-0 z-[60] h-[calc(100svh-2.5rem)] w-full"
-      : "pointer-events-none h-full w-full"
-  )
-}
+type DesktopStatus = "idle" | "connecting" | "connected" | "disconnected"
 
-// The design's workspace panel: a 40px header with reconnect, the stream in
-// a screen card, and a caption. Clicking the stream opens fullscreen.
+// One live noVNC screen drives both surfaces, as in the reference repo: the
+// screen div is created once outside React and reparented between the panel
+// card and the fullscreen dialog. Moving a plain div keeps the stream alive —
+// reparenting an iframe would reload it and restart VNC.
 function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
   const { open } = useDesktopPanel()
-  const [src, setSrc] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
+  const [status, setStatus] = useState<DesktopStatus>("idle")
   const [fullscreen, setFullscreen] = useState(false)
-  const [reloadKey, setReloadKey] = useState(0)
-  const loading = useRef(false)
-  const previewRef = useRef<HTMLDivElement>(null)
-  const frameRef = useRef<HTMLIFrameElement | null>(null)
+  const screenRef = useRef<HTMLDivElement | null>(null)
+  const rfbRef = useRef<RFB | null>(null)
+  const interactiveRef = useRef(false)
+  // Only the latest connection attempt may report its status
+  const attemptRef = useRef(0)
 
-  // The desktop costs a sandbox boot, so only resolve its URL once the panel
-  // is actually opened. The URL then lives for the rest of the chat.
-  useEffect(() => {
-    if (!open || src || failed || loading.current) return
-    loading.current = true
-    getDesktopUrl(chatId)
-      .then(setSrc)
-      .catch(() => setFailed(true))
-      .finally(() => {
-        loading.current = false
+  const [panelSlot, setPanelSlot] = useState<HTMLDivElement | null>(null)
+  const [dialogSlot, setDialogSlot] = useState<HTMLDivElement | null>(null)
+
+  const getScreen = useCallback(() => {
+    if (!screenRef.current) {
+      screenRef.current = document.createElement("div")
+      screenRef.current.className = "size-full"
+    }
+    return screenRef.current
+  }, [])
+
+  const connect = useCallback(async () => {
+    const attempt = ++attemptRef.current
+    rfbRef.current?.disconnect()
+    rfbRef.current = null
+    setStatus("connecting")
+    const startedAt = Date.now()
+
+    try {
+      // noVNC touches window at module scope, so it can only load in the
+      // browser — a top-level import would crash this page's server render.
+      const [url, { default: RFB }] = await Promise.all([
+        getDesktopUrl(chatId),
+        import("@novnc/novnc"),
+      ])
+      if (attempt !== attemptRef.current) return
+
+      const rfb = new RFB(
+        getScreen(),
+        `wss://${new URL(url).host}/websockify`,
+        { shared: true, scaleViewport: true, resizeSession: false }
+      )
+      rfb.background = "transparent"
+      rfb.viewOnly = !interactiveRef.current
+      rfb.addEventListener("connect", () => {
+        if (attempt !== attemptRef.current) return
+        setStatus("connected")
+        Sentry.logger.info("Desktop stream connected", {
+          "pandora.chat.id": chatId,
+          "pandora.desktop.connect_ms": Date.now() - startedAt,
+        })
+        if (interactiveRef.current) rfb.focus()
+        // noVNC scales once at framebuffer-resize; re-fit in case the
+        // container's layout raced the handshake.
+        rfb.scaleViewport = true
       })
-  }, [open, chatId, src, failed])
+      rfb.addEventListener("disconnect", (event) => {
+        if (attempt !== attemptRef.current) return
+        rfbRef.current = null
+        setStatus("disconnected")
+        // Unclean means the connection dropped or never opened
+        if (!event.detail.clean) {
+          Sentry.logger.warn("Desktop connection lost", {
+            "pandora.chat.id": chatId,
+          })
+        }
+      })
+      rfbRef.current = rfb
+    } catch (error) {
+      if (attempt !== attemptRef.current) return
+      setStatus("disconnected")
+      Sentry.logger.error("Desktop failed to open", {
+        "pandora.chat.id": chatId,
+        ...(error instanceof Error && { "error.message": error.message }),
+      })
+    }
+  }, [chatId, getScreen])
+
+  const setInteractive = useCallback((interactive: boolean) => {
+    interactiveRef.current = interactive
+    const rfb = rfbRef.current
+    if (!rfb) return
+    rfb.viewOnly = !interactive
+    if (interactive) rfb.focus()
+  }, [])
+
+  // Connect the first time the panel opens and keep the stream for later.
+  // Deferred one tick so connect()'s setState stays out of the effect body.
+  useEffect(() => {
+    if (!open || status !== "idle") return
+    const timer = setTimeout(() => void connect(), 0)
+    return () => clearTimeout(timer)
+  }, [open, status, connect])
+
+  // The dialog's slot only exists while it is open, and wins while it does.
+  useLayoutEffect(() => {
+    const slot = dialogSlot ?? panelSlot
+    if (!slot) return
+    slot.appendChild(getScreen())
+    setInteractive(slot === dialogSlot)
+  }, [dialogSlot, panelSlot, getScreen, setInteractive])
+
+  // noVNC rescales only on window resize, never on element resize — re-fit
+  // after every surface change (panel open/close, fullscreen toggle).
+  useEffect(() => {
+    const rfb = rfbRef.current
+    if (rfb && status === "connected") rfb.scaleViewport = true
+  }, [open, fullscreen, status])
 
   useEffect(() => {
-    if (!src) return
-    // The iframe loads our own noVNC client, whose websocket connects the
-    // browser straight to the sandbox's signed preview URL — a websocket
-    // handshake never renders Daytona's preview warning page, which would
-    // otherwise intercept every browser navigation to the preview link.
-    const wsUrl = `wss://${new URL(src).host}/websockify`
-    const frame = document.createElement("iframe")
-    frame.src = `/desktop/vnc?ws=${encodeURIComponent(wsUrl)}`
-    frame.title = `${name}'s desktop`
-    frame.className = frameClassName(false)
-    frameRef.current = frame
-    previewRef.current?.appendChild(frame)
+    const attempts = attemptRef
+    const rfb = rfbRef
     return () => {
-      frame.remove()
-      frameRef.current = null
+      attempts.current++
+      rfb.current?.disconnect()
+      rfb.current = null
     }
-  }, [src, name, reloadKey])
-
-  useEffect(() => {
-    const frame = frameRef.current
-    if (frame) frame.className = frameClassName(fullscreen)
-  }, [fullscreen, src])
-
-  const reconnect = () => {
-    if (!src) {
-      setFailed(false)
-      return
-    }
-    // Recreating the iframe restarts the VNC session against the same URL.
-    setReloadKey((key) => key + 1)
-  }
+  }, [])
 
   return (
     <>
@@ -92,7 +153,8 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
           variant="ghost"
           size="icon-sm"
           aria-label="Reconnect"
-          onClick={reconnect}
+          disabled={status === "connecting"}
+          onClick={() => void connect()}
         >
           <RefreshCwIcon />
         </Button>
@@ -100,17 +162,26 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
       <div className="flex min-h-0 flex-1 flex-col items-center gap-2 p-3">
         <div className="w-full overflow-hidden rounded-lg border bg-card p-1.5">
           <div className="relative aspect-[4/3] w-full overflow-hidden rounded-md bg-black">
-            <div
-              ref={previewRef}
-              className="pointer-events-none h-full w-full"
-            />
-            {!src && (
+            <div ref={setPanelSlot} className="absolute inset-0" />
+            {status === "connected" ? (
+              <button
+                type="button"
+                className="absolute inset-0 cursor-zoom-in"
+                onClick={() => {
+                  Sentry.logger.info("Desktop fullscreen opened", {
+                    "pandora.chat.id": chatId,
+                  })
+                  setFullscreen(true)
+                }}
+                aria-label="Open desktop in fullscreen"
+              />
+            ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-xs text-white/60">
-                {failed ? (
+                {status === "disconnected" ? (
                   <>
-                    <p>Desktop unavailable.</p>
+                    <p>Screen disconnected.</p>
                     <Button
-                      onClick={() => setFailed(false)}
+                      onClick={() => void connect()}
                       size="sm"
                       variant="outline"
                     >
@@ -124,19 +195,6 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
                   </>
                 )}
               </div>
-            )}
-            {src && (
-              <button
-                type="button"
-                className="absolute inset-0 cursor-zoom-in"
-                onClick={() => {
-                  Sentry.logger.info("Desktop fullscreen opened", {
-                    "pandora.chat.id": chatId,
-                  })
-                  setFullscreen(true)
-                }}
-                aria-label="Open desktop in fullscreen"
-              />
             )}
           </div>
         </div>
@@ -159,9 +217,8 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
           setFullscreen(false)
         }}
         disablePointerDismissal
-        // The desktop iframe lives in the panel, not the dialog, so it must not
-        // be inert/aria-hidden while fullscreen. It is positioned over the
-        // dialog body instead of being moved into it.
+        // The screen div is reparented into the dialog, so the panel must not
+        // be inert/aria-hidden while fullscreen.
         modal={false}
       >
         <DialogContent
@@ -181,7 +238,7 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
               <span className="sr-only">Close</span>
             </DialogClose>
           </div>
-          <div className="min-h-0 flex-1 bg-black" />
+          <div ref={setDialogSlot} className="min-h-0 flex-1 bg-black" />
         </DialogContent>
       </Dialog>
     </>
