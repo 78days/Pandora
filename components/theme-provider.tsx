@@ -10,7 +10,9 @@ function ThemeProvider({
   return (
     <NextThemesProvider
       attribute="class"
-      defaultTheme="system"
+      // The design is dark; first paint follows it, and the system preference
+      // still applies once the user switches (the "d" hotkey below).
+      defaultTheme="dark"
       enableSystem
       disableTransitionOnChange
       {...props}

@@ -26,7 +26,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Kbd } from "@/components/ui/kbd"
 import {
   Sidebar,
   SidebarContent,
@@ -116,7 +115,9 @@ export function AppSidebar({
                 Search
               </span>
             </span>
-            <Kbd className="group-data-[collapsible=icon]:hidden">⌘K</Kbd>
+            <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+              ⌘K
+            </span>
           </Button>
         </SidebarHeader>
         <SidebarContent>{chats}</SidebarContent>
@@ -131,8 +132,8 @@ export function AppSidebar({
                     appearance={{
                       elements: {
                         userButtonTrigger:
-                          "flex h-12 w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0!",
-                        userButtonAvatarBox: "size-8 rounded-lg",
+                          "flex h-10 w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0!",
+                        userButtonAvatarBox: "size-6 rounded-full",
                         userButtonOuterIdentifier:
                           "min-w-0 truncate group-data-[collapsible=icon]:hidden",
                       },

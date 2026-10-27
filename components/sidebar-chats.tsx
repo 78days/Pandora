@@ -6,7 +6,6 @@ import { CommandEmpty, CommandGroup } from "@/components/ui/command"
 import {
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuSkeleton,
@@ -24,7 +23,6 @@ async function SidebarChats() {
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Chats</SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>
           {chats.map((chat) => (
@@ -69,7 +67,6 @@ async function CommandChats() {
 function SidebarChatsSkeleton() {
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Chats</SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu>
           {Array.from({ length: 3 }, (_, i) => (

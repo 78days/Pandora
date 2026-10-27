@@ -162,7 +162,7 @@ function GroupChatDialog({
 
   return (
     <Dialog open={open} onOpenChange={changeOpen}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="rounded-[14px]">
         <DialogHeader>
           <DialogTitle>
             {groupChat ? "Edit group chat" : "New group chat"}

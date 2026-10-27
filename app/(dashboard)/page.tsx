@@ -17,11 +17,11 @@ export default async function Page() {
   return (
     <Empty className="min-h-svh">
       <EmptyHeader>
-        <EmptyMedia className="mb-4">
-          <ChatAvatar seed={crypto.randomUUID()} />
+        <EmptyMedia>
+          <ChatAvatar seed={crypto.randomUUID()} className="size-12" />
         </EmptyMedia>
         <EmptyTitle>Meet your first bot</EmptyTitle>
-        <EmptyDescription className="text-wrap">
+        <EmptyDescription>
           Every bot gets its own personality, memory, and face. Spin one up and
           start the conversation.
         </EmptyDescription>

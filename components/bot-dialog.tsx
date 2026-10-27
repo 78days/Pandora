@@ -184,7 +184,7 @@ function BotDialog({
           Create a new bot
         </DialogTrigger>
       )}
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="rounded-[14px] sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{bot ? "Edit bot" : "New bot"}</DialogTitle>
           <DialogDescription>
@@ -210,19 +210,25 @@ function BotDialog({
               ))}
             </div>
             <Field orientation="horizontal">
-              <FieldTitle>Face</FieldTitle>
-              <div className="flex items-center gap-2">
-                <ChatAvatar seed={avatar} className="size-10" />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => form.setValue("avatar", crypto.randomUUID())}
-                >
-                  <ShuffleIcon />
-                  Shuffle
-                </Button>
+              <div className="flex min-w-0 items-center gap-3">
+                <ChatAvatar seed={avatar} className="size-14 shrink-0" />
+                <div className="flex min-w-0 flex-col">
+                  <FieldTitle>Face</FieldTitle>
+                  <span className="truncate text-sm text-muted-foreground">
+                    Shuffle until you find one you like.
+                  </span>
+                </div>
               </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => form.setValue("avatar", crypto.randomUUID())}
+              >
+                <ShuffleIcon />
+                Shuffle
+              </Button>
             </Field>
             <Field data-invalid={!!errors.name}>
               <FieldLabel htmlFor="bot-name">Name</FieldLabel>

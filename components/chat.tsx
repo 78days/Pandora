@@ -8,7 +8,7 @@ import {
 } from "@trigger.dev/sdk/chat/react"
 import type { ToolUIPart } from "ai"
 import { cn } from "cn"
-import { CheckIcon, CopyIcon, RefreshCwIcon } from "lucide-react"
+import { CheckIcon, CopyIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
 import { useRouter } from "next/navigation"
 import {
   useCallback,
@@ -41,6 +41,7 @@ import {
 import {
   PromptInput,
   PromptInputBody,
+  PromptInputButton,
   PromptInputFooter,
   PromptInputSelect,
   PromptInputSelectContent,
@@ -63,7 +64,6 @@ import { GroupChatAvatar } from "@/components/group-chat-avatar"
 import { useBillable } from "@/hooks/use-billable"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Kbd } from "@/components/ui/kbd"
 import { toast } from "@/components/ui/toast"
 import type { ChatMember } from "@/queries/chats"
 import type { pandoraChat } from "@/trigger/chat"
@@ -495,7 +495,7 @@ function ChatView({
             description={`Say hello to start the conversation with ${selectedBot.name}.`}
           />
         ) : (
-          <ConversationContent>
+          <ConversationContent className="px-6">
             {messages.map((message, index) => {
               const isLastMessage = index === messages.length - 1
               // Each user message names the bot it was addressed to, recorded
@@ -589,7 +589,16 @@ function ChatView({
                         author && "flex-1"
                       )}
                     >
-                      <MessageContent>
+                      {/* Design bubbles: user #404040, bot #262626, both
+                          r=22 — scoped to the role groups so they win over
+                          MessageContent's own group rules. */}
+                      <MessageContent
+                        className={
+                          message.role === "user"
+                            ? "group-[.is-user]:rounded-[22px] group-[.is-user]:bg-neutral-700 group-[.is-user]:px-3 group-[.is-user]:py-2.5"
+                            : "group-[.is-assistant]:rounded-[22px] group-[.is-assistant]:bg-muted group-[.is-assistant]:px-3 group-[.is-assistant]:py-2.5"
+                        }
+                      >
                         {addressedBot ? (
                           // The tag rides on the first line, as if the user
                           // named the bot at the start of their message.
@@ -706,7 +715,6 @@ function ChatView({
             <PromptInputTextarea
               autoFocus
               onKeyDown={handleTextareaKeyDown}
-              placeholder={`Message ${selectedBot.name}...`}
               ref={textareaRef}
             />
           </PromptInputBody>
@@ -745,21 +753,17 @@ function ChatView({
                 </PromptInputSelect>
               </PromptInputTools>
             ) : (
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <Kbd>↵</Kbd> send
-                </span>
-                <span className="flex items-center gap-1">
-                  <Kbd>⇧</Kbd>
-                  <Kbd>↵</Kbd> newline
-                </span>
-                <span className="flex items-center gap-1">
-                  <Kbd>↑</Kbd> history
-                </span>
-                <span className="flex items-center gap-1">
-                  <Kbd>esc</Kbd> stop
-                </span>
-              </div>
+              // The design's composer attach button; there is nothing to
+              // attach yet, so it stays inert.
+              <PromptInputTools>
+                <PromptInputButton
+                  aria-label="Attachments"
+                  disabled
+                  tooltip="Attachments coming soon"
+                >
+                  <PlusIcon />
+                </PromptInputButton>
+              </PromptInputTools>
             )}
             <PromptInputSubmit status={status} onStop={stop} />
           </PromptInputFooter>

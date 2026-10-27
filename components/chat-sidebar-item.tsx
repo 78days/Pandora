@@ -32,17 +32,19 @@ function ChatSidebarItem({
         render={<Link href={`/chats/${chatId}`} />}
       >
         <GroupChatAvatar avatars={avatars} />
-        <div className="grid flex-1 gap-0.5 text-left leading-tight group-data-[collapsible=icon]:hidden">
-          <span className="truncate font-medium">{name}</span>
+        <div className="grid min-w-0 flex-1 gap-0.5 text-left leading-tight group-data-[collapsible=icon]:hidden">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="truncate font-medium">{name}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {timeLabel}
+            </span>
+          </div>
           {lastMessagePreview && (
             <span className="truncate text-xs text-muted-foreground">
               {lastMessagePreview}
             </span>
           )}
         </div>
-        <span className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-          {timeLabel}
-        </span>
       </SidebarMenuButton>
     </SidebarMenuItem>
   )

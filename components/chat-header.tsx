@@ -1,6 +1,6 @@
 "use client"
 
-import { MonitorIcon, PencilIcon } from "lucide-react"
+import { MonitorIcon } from "lucide-react"
 import { useState } from "react"
 
 import { BotDialog, type EditableBot } from "@/components/bot-dialog"
@@ -11,6 +11,8 @@ import { GroupChatDialog } from "@/components/group-chat-dialog"
 import { useBillable } from "@/hooks/use-billable"
 import { Button } from "@/components/ui/button"
 
+// The bot pill in the design is 20px face + 13px medium name in a 28px
+// h-7 button; the monitor button lights up while the panel is open.
 function ChatHeader({ bot }: { bot: EditableBot }) {
   const [editOpen, setEditOpen] = useState(false)
   const desktop = useDesktopPanel()
@@ -22,16 +24,16 @@ function ChatHeader({ bot }: { bot: EditableBot }) {
       <header className="flex h-10 items-center gap-2 border-b px-4">
         <Button
           variant="ghost"
-          className="gap-2 px-2 text-sm font-semibold"
+          size="sm"
+          className="min-w-0 shrink gap-1.5 px-2 font-medium"
           onClick={() => setEditOpen(true)}
         >
           <ChatAvatar seed={bot.avatar} className="size-5" />
-          {bot.name}
-          <PencilIcon className="opacity-60" />
+          <span className="truncate text-[13px]">{bot.name}</span>
         </Button>
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           className="ml-auto"
           aria-label="Desktop view"
           aria-pressed={desktop.open}
@@ -48,8 +50,8 @@ function ChatHeader({ bot }: { bot: EditableBot }) {
   )
 }
 
-// Groups: the whole title is an edit button — rename, swap members, delete.
-// No desktop panel of its own, unlike a direct chat's header.
+// Groups: the whole title opens the edit dialog — rename, swap members,
+// delete. No desktop panel of its own, unlike a direct chat's header.
 function GroupChatHeader({
   group,
 }: {
@@ -66,15 +68,15 @@ function GroupChatHeader({
       <header className="flex h-10 items-center gap-2 border-b px-4">
         <Button
           variant="ghost"
-          className="gap-2 px-2 text-sm font-semibold"
+          size="sm"
+          className="min-w-0 shrink gap-1.5 px-2 font-medium"
           onClick={() => setEditOpen(true)}
         >
           <GroupChatAvatar
             avatars={group.members.map((member) => member.avatar)}
             className="size-5"
           />
-          {group.name}
-          <PencilIcon className="opacity-60" />
+          <span className="truncate text-[13px]">{group.name}</span>
         </Button>
       </header>
       <GroupChatDialog

@@ -34,7 +34,9 @@ type GroupChatAvatarProps = {
 }
 
 // Same footprint as ChatAvatar wherever it renders (sidebar, header, empty
-// state); pass the size through className, e.g. "size-5" or "size-12".
+// state); pass the size through className, e.g. "size-5" or "size-12". The
+// size-8 default is load-bearing: the slots are absolutely positioned, so
+// without an explicit size the container collapses to zero.
 function GroupChatAvatar({ avatars, className }: GroupChatAvatarProps) {
   const slots = SLOTS[Math.min(Math.max(avatars.length, 1), 4) - 1]
   const restCount = avatars.length - MAX_VISIBLE
@@ -42,7 +44,7 @@ function GroupChatAvatar({ avatars, className }: GroupChatAvatarProps) {
   return (
     <span
       className={cn(
-        "@container relative inline-block aspect-square shrink-0",
+        "@container relative inline-block aspect-square size-8 shrink-0",
         className
       )}
     >

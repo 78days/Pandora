@@ -1,7 +1,7 @@
 "use client"
 
 import { cn } from "cn"
-import { LoaderCircleIcon, Maximize2Icon, XIcon } from "lucide-react"
+import { LoaderCircleIcon, RefreshCwIcon, XIcon } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import * as Sentry from "@sentry/nextjs"
@@ -27,11 +27,14 @@ function frameClassName(fullscreen: boolean) {
   )
 }
 
+// The design's workspace panel: a 40px header with reconnect, the stream in
+// a screen card, and a caption. Clicking the stream opens fullscreen.
 function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
   const { open } = useDesktopPanel()
   const [src, setSrc] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   const loading = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
@@ -66,56 +69,78 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
       frame.remove()
       frameRef.current = null
     }
-  }, [src, name])
+  }, [src, name, reloadKey])
 
   useEffect(() => {
     const frame = frameRef.current
     if (frame) frame.className = frameClassName(fullscreen)
   }, [fullscreen, src])
 
+  const reconnect = () => {
+    if (!src) {
+      setFailed(false)
+      return
+    }
+    // Recreating the iframe restarts the VNC session against the same URL.
+    setReloadKey((key) => key + 1)
+  }
+
   return (
     <>
-      <div className="relative h-full w-full">
-        <div ref={previewRef} className="pointer-events-none h-full w-full" />
-        {!src && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 text-center text-xs text-white/60">
-            {failed ? (
-              <>
-                <p>Desktop unavailable.</p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setFailed(false)}
-                >
-                  Try again
-                </Button>
-              </>
-            ) : (
-              <>
-                <LoaderCircleIcon className="size-4 animate-spin" />
-                <p>Starting desktop…</p>
-              </>
+      <div className="flex h-10 shrink-0 items-center justify-end px-3">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Reconnect"
+          onClick={reconnect}
+        >
+          <RefreshCwIcon />
+        </Button>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center gap-2 p-3">
+        <div className="w-full overflow-hidden rounded-lg border bg-card p-1.5">
+          <div className="relative aspect-[4/3] w-full overflow-hidden rounded-md bg-black">
+            <div
+              ref={previewRef}
+              className="pointer-events-none h-full w-full"
+            />
+            {!src && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-xs text-white/60">
+                {failed ? (
+                  <>
+                    <p>Desktop unavailable.</p>
+                    <Button
+                      onClick={() => setFailed(false)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Try again
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <LoaderCircleIcon className="size-4 animate-spin" />
+                    <p>Starting desktop…</p>
+                  </>
+                )}
+              </div>
+            )}
+            {src && (
+              <button
+                type="button"
+                className="absolute inset-0 cursor-zoom-in"
+                onClick={() => {
+                  Sentry.logger.info("Desktop fullscreen opened", {
+                    "pandora.chat.id": chatId,
+                  })
+                  setFullscreen(true)
+                }}
+                aria-label="Open desktop in fullscreen"
+              />
             )}
           </div>
-        )}
-        {src && (
-          <>
-            <button
-              type="button"
-              className="absolute inset-0 cursor-zoom-in"
-              onClick={() => {
-                Sentry.logger.info("Desktop fullscreen opened", {
-                  "pandora.chat.id": chatId,
-                })
-                setFullscreen(true)
-              }}
-              aria-label="Open desktop in fullscreen"
-            />
-            <span className="pointer-events-none absolute right-2 bottom-2 rounded-md bg-black/60 p-1.5 text-white">
-              <Maximize2Icon className="size-4" />
-            </span>
-          </>
-        )}
+        </div>
+        <p className="text-xs text-muted-foreground">{name}&apos;s screen</p>
       </div>
       <Dialog
         open={fullscreen}
@@ -144,12 +169,12 @@ function ChatDesktop({ chatId, name }: { chatId: string; name: string }) {
           className="flex h-svh w-screen max-w-none flex-col gap-0 rounded-none p-0 ring-0 sm:max-w-none"
         >
           <div className="flex h-10 shrink-0 items-center gap-2 border-b px-4">
-            <DialogTitle className="text-sm font-semibold">
-              {name}&apos;s desktop
+            <DialogTitle className="text-sm font-medium">
+              {name}&apos;s screen
             </DialogTitle>
             <DialogClose
               render={
-                <Button variant="ghost" size="icon" className="ml-auto" />
+                <Button variant="ghost" size="icon-sm" className="ml-auto" />
               }
             >
               <XIcon />
