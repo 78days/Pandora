@@ -1,13 +1,28 @@
 "use client"
 
 import { zodResolver } from "@hookform/resolvers/zod"
+import { TrashIcon } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import { useForm, useWatch } from "react-hook-form"
 
-import { createGroupChat } from "@/actions/group-chat"
+import {
+  createGroupChat,
+  deleteGroupChat,
+  updateGroupChat,
+} from "@/actions/group-chat"
 import { listBots } from "@/actions/bot"
 import { ChatAvatar } from "@/components/chat-avatar"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -31,22 +46,41 @@ import { groupChatsInsertSchema, type GroupChatsInsert } from "@/db/schema"
 
 type BotOption = { id: string; name: string; avatar: string }
 
+// Passing `groupChat` switches the dialog to edit mode prefilled with the
+// group's current name and members (mirrors BotDialog's optional bot prop).
+export type EditableGroupChat = {
+  id: string
+  name: string
+  memberIds: string[]
+}
+
 const emptyValues: GroupChatsInsert = { name: "", botIds: [] }
 
-// Controlled-only: the sidebar header's dropdown opens it. Bots load from the
-// server each time it opens, so a bot created since the last visit shows up.
+function valuesFor(groupChat?: EditableGroupChat): GroupChatsInsert {
+  return groupChat
+    ? { name: groupChat.name, botIds: groupChat.memberIds }
+    : emptyValues
+}
+
+// Controlled-only: the sidebar header's dropdown opens creation; the group
+// chat header opens editing. Bots load from the server each time it opens,
+// so a bot created since the last visit shows up.
 function GroupChatDialog({
+  groupChat,
   open,
   onOpenChange,
 }: {
+  groupChat?: EditableGroupChat
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
   const router = useRouter()
   const [bots, setBots] = useState<BotOption[] | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const form = useForm<GroupChatsInsert>({
     resolver: zodResolver(groupChatsInsertSchema),
-    defaultValues: emptyValues,
+    defaultValues: valuesFor(groupChat),
   })
   const { errors, isSubmitting } = form.formState
   const selectedIds = useWatch({ control: form.control, name: "botIds" }) ?? []
@@ -71,7 +105,7 @@ function GroupChatDialog({
 
   function changeOpen(nextOpen: boolean) {
     onOpenChange(nextOpen)
-    if (!nextOpen) form.reset(emptyValues)
+    if (!nextOpen) form.reset(valuesFor(groupChat))
   }
 
   // The Base UI checkbox is button-based, so it can't be registered like a
@@ -87,15 +121,42 @@ function GroupChatDialog({
 
   async function onSubmit(values: GroupChatsInsert) {
     try {
-      const { chatId } = await createGroupChat(values)
-      form.reset(emptyValues)
-      router.push(`/chats/${chatId}`)
+      if (groupChat) {
+        await updateGroupChat(groupChat.id, values)
+      } else {
+        const { chatId } = await createGroupChat(values)
+        router.push(`/chats/${chatId}`)
+      }
+      form.reset(valuesFor(groupChat))
       router.refresh()
       changeOpen(false)
     } catch {
       form.setError("root", {
-        message: "Could not create the group chat. Please try again.",
+        message: groupChat
+          ? "Could not update the group chat. Please try again."
+          : "Could not create the group chat. Please try again.",
       })
+    }
+  }
+
+  async function onDelete() {
+    if (!groupChat) return
+    setIsDeleting(true)
+    try {
+      await deleteGroupChat(groupChat.id)
+      changeOpen(false)
+      setConfirmOpen(false)
+      // The deleted group's page no longer exists; refresh discards the
+      // cached route so the sidebar queries rerun without it.
+      router.replace("/")
+      router.refresh()
+    } catch {
+      setConfirmOpen(false)
+      form.setError("root", {
+        message: "Could not delete the group chat. Please try again.",
+      })
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -103,9 +164,13 @@ function GroupChatDialog({
     <Dialog open={open} onOpenChange={changeOpen}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>New group chat</DialogTitle>
+          <DialogTitle>
+            {groupChat ? "Edit group chat" : "New group chat"}
+          </DialogTitle>
           <DialogDescription>
-            Name the group and pick which bots are in it.
+            {groupChat
+              ? "Rename the group or change who's in it."
+              : "Name the group and pick which bots are in it."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={form.handleSubmit(onSubmit)}>
@@ -148,7 +213,11 @@ function GroupChatDialog({
                       key={bot.id}
                     >
                       <Checkbox
-                        aria-label={`Add ${bot.name}`}
+                        aria-label={
+                          groupChat
+                            ? `${selectedIds.includes(bot.id) ? "Remove" : "Add"} ${bot.name}`
+                            : `Add ${bot.name}`
+                        }
                         checked={selectedIds.includes(bot.id)}
                         onCheckedChange={(checked) =>
                           toggleBot(bot.id, checked === true)
@@ -165,15 +234,49 @@ function GroupChatDialog({
           </FieldGroup>
           <FieldError errors={[errors.root]} className="mt-4" />
           <DialogFooter className="mt-4">
+            {groupChat && (
+              <Button
+                type="button"
+                variant="destructive"
+                className="mr-auto"
+                onClick={() => setConfirmOpen(true)}
+              >
+                <TrashIcon data-icon="inline-start" />
+                Delete
+              </Button>
+            )}
             <DialogClose render={<Button variant="outline" />}>
               Cancel
             </DialogClose>
             <Button type="submit" disabled={isSubmitting}>
-              Create group
+              {groupChat ? "Save changes" : "Create group"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
+      {groupChat && (
+        <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete group chat?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently removes {groupChat.name} for everyone in it.
+                The bots themselves are unaffected. This can&rsquo;t be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                disabled={isDeleting}
+                onClick={onDelete}
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </Dialog>
   )
 }

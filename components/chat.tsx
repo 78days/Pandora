@@ -59,6 +59,7 @@ import { Shimmer } from "@/components/ai-elements/shimmer"
 import { Tool, ToolContent, ToolHeader } from "@/components/ai-elements/tool"
 import { ChatAvatar } from "@/components/chat-avatar"
 import { GroupChatAvatar } from "@/components/group-chat-avatar"
+import { useBillable } from "@/hooks/use-billable"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
@@ -242,6 +243,7 @@ function ChatView({
 }) {
   // TEMPORARY debug strip data — counts of transport lifecycle events.
   const [streamEvents, setStreamEvents] = useState<Record<string, number>>({})
+  const isBillable = useBillable()
 
   // Who the next turn goes to. Direct chats have a single member; groups pick
   // in the composer. A stale id (navigated away and back) falls back to the
@@ -670,6 +672,9 @@ function ChatView({
       <div className="p-4">
         <PromptInput
           onSubmit={(message) => {
+            // Sending is the billable "bot usage" — every turn runs the bot
+            // and can reach its sandbox through tools.
+            if (!isBillable()) return
             const text = message.text?.trim()
             if (!text) return
             const sent = sentRef.current

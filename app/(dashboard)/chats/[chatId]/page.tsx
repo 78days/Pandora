@@ -28,8 +28,11 @@ export default async function ChatPage({
     >
       {chat.kind === "group" ? (
         <GroupChatHeader
-          name={chat.name ?? "Group chat"}
-          avatars={chat.members.map((member) => member.avatar)}
+          group={{
+            id: chat.id,
+            name: chat.name ?? "Group chat",
+            members: chat.members,
+          }}
         />
       ) : (
         <ChatHeader bot={chat.members[0]} />

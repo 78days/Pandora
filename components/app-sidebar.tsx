@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react"
 import { BotDialog } from "@/components/bot-dialog"
 import { CloseSearchDialogProvider } from "@/components/chat-command-item"
 import { GroupChatDialog } from "@/components/group-chat-dialog"
+import { useBillable } from "@/hooks/use-billable"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -43,6 +44,8 @@ export function AppSidebar({
   const [botDialogOpen, setBotDialogOpen] = useState(false)
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  // Bot creation spins up a paid sandbox along with the bot itself.
+  const isBillable = useBillable()
   const closeSearchDialog = useCallback(() => setSearchOpen(false), [])
 
   useEffect(() => {
@@ -71,7 +74,12 @@ export function AppSidebar({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" side="bottom">
               <DropdownMenuGroup>
-                <DropdownMenuItem onClick={() => setBotDialogOpen(true)}>
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (!isBillable()) return
+                    setBotDialogOpen(true)
+                  }}
+                >
                   <PlusIcon />
                   Create a new bot
                 </DropdownMenuItem>

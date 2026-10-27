@@ -7,11 +7,15 @@ import { BotDialog, type EditableBot } from "@/components/bot-dialog"
 import { ChatAvatar } from "@/components/chat-avatar"
 import { useDesktopPanel } from "@/components/chat-panels"
 import { GroupChatAvatar } from "@/components/group-chat-avatar"
+import { GroupChatDialog } from "@/components/group-chat-dialog"
+import { useBillable } from "@/hooks/use-billable"
 import { Button } from "@/components/ui/button"
 
 function ChatHeader({ bot }: { bot: EditableBot }) {
   const [editOpen, setEditOpen] = useState(false)
   const desktop = useDesktopPanel()
+  // Opening the desktop view connects to the bot's sandbox.
+  const isBillable = useBillable()
 
   return (
     <>
@@ -31,7 +35,10 @@ function ChatHeader({ bot }: { bot: EditableBot }) {
           className="ml-auto text-white hover:bg-white/10 hover:text-white"
           aria-label="Desktop view"
           aria-pressed={desktop.open}
-          onClick={desktop.toggle}
+          onClick={() => {
+            if (!isBillable()) return
+            desktop.toggle()
+          }}
         >
           <MonitorIcon />
         </Button>
@@ -41,21 +48,45 @@ function ChatHeader({ bot }: { bot: EditableBot }) {
   )
 }
 
-// Groups have no edit target and no desktop panel of their own.
+// Groups: the whole title is an edit button — rename, swap members, delete.
+// No desktop panel of its own, unlike a direct chat's header.
 function GroupChatHeader({
-  name,
-  avatars,
+  group,
 }: {
-  name: string
-  avatars: string[]
+  group: {
+    id: string
+    name: string
+    members: { id: string; avatar: string }[]
+  }
 }) {
+  const [editOpen, setEditOpen] = useState(false)
+
   return (
-    <header className="flex h-10 items-center gap-2 border-b border-white/15 bg-black px-4 text-white">
-      <div className="flex items-center gap-2 px-2 text-sm font-semibold">
-        <GroupChatAvatar avatars={avatars} className="size-5" />
-        {name}
-      </div>
-    </header>
+    <>
+      <header className="flex h-10 items-center gap-2 border-b border-white/15 bg-black px-4 text-white">
+        <Button
+          variant="ghost"
+          className="gap-2 px-2 text-sm font-semibold text-white hover:bg-white/10 hover:text-white"
+          onClick={() => setEditOpen(true)}
+        >
+          <GroupChatAvatar
+            avatars={group.members.map((member) => member.avatar)}
+            className="size-5"
+          />
+          {group.name}
+          <PencilIcon className="opacity-60" />
+        </Button>
+      </header>
+      <GroupChatDialog
+        groupChat={{
+          id: group.id,
+          name: group.name,
+          memberIds: group.members.map((member) => member.id),
+        }}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+      />
+    </>
   )
 }
 

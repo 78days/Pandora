@@ -1,5 +1,6 @@
 "use server"
 
+import { requirePaidPlan } from "@/lib/billing-server"
 import { getDaytona } from "@/lib/daytona"
 import { getChat } from "@/queries/chats"
 
@@ -13,6 +14,8 @@ const URL_TTL_SECONDS = 86_400
 // boot a sandbox. Signed URLs are port-scoped and can be embedded in an
 // iframe; the sandbox-wide preview token cannot.
 export async function getDesktopUrl(chatId: string) {
+  // Opening the desktop view connects to the bot's sandbox.
+  await requirePaidPlan()
   const chat = await getChat(chatId)
   if (!chat) throw new Error("Chat not found")
   // Only a direct chat's bot has a desktop; group chats never mount the panel.

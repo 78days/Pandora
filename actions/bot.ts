@@ -7,6 +7,7 @@ import { nanoid } from "nanoid"
 
 import { db } from "@/db"
 import { bots, botsInsertSchema, chatMembers, chats } from "@/db/schema"
+import { requirePaidPlan } from "@/lib/billing-server"
 import { getDaytona } from "@/lib/daytona"
 import { MEMORY_FILE_PATH } from "@/lib/memory"
 
@@ -25,6 +26,9 @@ export async function listBots() {
 export async function createBot(input: unknown) {
   const { userId } = await auth()
   if (!userId) throw new Error("Unauthorized")
+  // One check covers both billable creations: the bot and the sandbox that
+  // comes with it.
+  await requirePaidPlan()
 
   const data = botsInsertSchema.parse(input)
   const botId = nanoid()

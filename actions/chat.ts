@@ -9,6 +9,7 @@ import {
 } from "@trigger.dev/sdk/ai"
 
 import { getChat } from "@/queries/chats"
+import { requirePaidPlan } from "@/lib/billing-server"
 import type { pandoraChat } from "@/trigger/chat"
 
 const startSessionAction =
@@ -29,12 +30,16 @@ export async function startChatSession(
   params: ChatStartSessionParams<typeof pandoraChat>
 ) {
   await requireChat(params.chatId)
+  // Chatting is the billable usage of a bot and its sandbox. Viewing the
+  // stored transcript stays free (loadChatTranscript is not gated).
+  await requirePaidPlan()
   return startSessionAction(params)
 }
 
 // Pure mint. The transport calls this again on a 401/403.
 export async function mintChatAccessToken(chatId: string) {
   await requireChat(chatId)
+  await requirePaidPlan()
 
   return triggerAuth.createPublicToken({
     scopes: { read: { sessions: chatId }, write: { sessions: chatId } },
