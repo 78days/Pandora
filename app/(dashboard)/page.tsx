@@ -1,4 +1,5 @@
 import { auth } from "@clerk/nextjs/server"
+import { redirect } from "next/navigation"
 
 import { BotDialog } from "@/components/bot-dialog"
 import { ChatAvatar } from "@/components/chat-avatar"
@@ -12,7 +13,8 @@ import {
 } from "@/components/ui/empty"
 
 export default async function Page() {
-  await auth.protect()
+  const { userId } = await auth()
+  if (!userId) redirect("/welcome")
 
   return (
     <Empty className="min-h-svh">
