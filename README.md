@@ -14,7 +14,7 @@ Pandora is a chat workspace for custom AI bots. Give one a name, a role, and sta
 
 [![Next.js 16][next-shield]][next-url] [![React 19][react-shield]][react-url] [![TypeScript 5][ts-shield]][ts-url] [![Tailwind CSS 4][tailwind-shield]][tailwind-url] [![Clerk][clerk-shield]][clerk-url] [![Neon Postgres][neon-shield]][neon-url] [![Trigger.dev][trigger-shield]][trigger-url] [![AI SDK 7][ai-sdk-shield]][ai-sdk-url]
 
-[Features](#features) · [Architecture](#architecture) · [Getting started](#getting-started) · [Roadmap](#roadmap)
+[Live demo](https://pandora-drab-ten.vercel.app/welcome) · [Features](#features) · [Architecture](#architecture) · [Getting started](#getting-started) · [Roadmap](#roadmap)
 
 </div>
 
